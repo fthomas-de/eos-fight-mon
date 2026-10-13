@@ -4,7 +4,7 @@ State on 2026-10-13. Read this, `README.md` and `PLAN.md` before continuing.
 
 ## Where things stand
 
-- Latest release: **v0.5.0** (https://github.com/fthomas-de/eos-fight-mon/releases/tag/v0.5.0), Windows exe + Linux binary + SHA256SUMS. `main` is pushed.
+- Latest release: **v0.6.0** (https://github.com/fthomas-de/eos-fight-mon/releases/tag/v0.6.0), Windows exe + Linux binary + SHA256SUMS. `main` is pushed.
 - unit tests green: `python -m unittest discover -s tests`
 - Python 3.13, standard library only. Build-time tools: PyInstaller (Windows), WSL Ubuntu + `uv` (Linux).
 
@@ -38,7 +38,7 @@ wsl.exe -d Ubuntu -- bash /mnt/c/Users/floth/Documents/eos-fight-mon/tools/build
 
 Before building: bump `VERSION` in `update.py`. The self-update finds the asset by its suffix `-windows-x64.exe` / `-linux-x86_64` and needs `SHA256SUMS.txt` (format `hash *name`) in the release, so keep those names.
 
-Release: copy both binaries renamed `eos-fight-mon-vX.Y.Z-windows-x64.exe` / `-linux-x86_64` into a folder, write `SHA256SUMS.txt` and `RELEASE_NOTES.md` (previous notes: `gh release view v0.5.0`), tag, push, then
+Release: copy both binaries renamed `eos-fight-mon-vX.Y.Z-windows-x64.exe` / `-linux-x86_64` into a folder, write `SHA256SUMS.txt` and `RELEASE_NOTES.md` (previous notes: `gh release view v0.6.0`), tag, push, then
 `"C:\Program Files\GitHub CLI\gh.exe" release create vX.Y.Z --repo fthomas-de/eos-fight-mon --title ... --notes-file ... <files>`
 and re-download to compare checksums. `gh` is logged in as `fthomas-de` but not on PATH in older terminals.
 
