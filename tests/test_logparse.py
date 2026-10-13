@@ -105,6 +105,20 @@ class WatcherTest(unittest.TestCase):
                 fh.write(JAM + "\r\n")
             self.assertEqual([e.logger for e in w.poll(d, "Alt")], ["Alt"])
 
+            self.assertFalse(w.foreign)
+            # German client (made-up wording): combat lines nobody understands -> warn
+            german = P + "<color=0xffcc0000><b>305</b> von Foe One[ABC](Jackdaw) - Rakete - Trifft"
+            with open(Path(d, "new.txt"), "a", newline="") as fh:
+                fh.write((german + "\r\n") * 10)
+            w.poll(d, "Alt")
+            self.assertFalse(w.foreign)  # Alt's jam line was understood
+            w2 = LogWatcher()
+            w2.poll(d, "Alt")
+            with open(Path(d, "new.txt"), "a", newline="") as fh:
+                fh.write((german + "\r\n") * 10)
+            w2.poll(d, "Alt")
+            self.assertTrue(w2.foreign)
+
             stale = time.time() - 3 * 86400
             os.utime(old, (stale, stale))
             self.assertEqual(characters(d), ["Alt"])

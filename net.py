@@ -52,6 +52,14 @@ async def send_reset(cfg):
         writer.close()
 
 
+def _warning(char, watcher):
+    if not char:
+        return "no character found in the gamelogs – check the log folder; EVE must run in English"
+    if watcher.foreign:
+        return f"cannot read the log of {char} – set the EVE client language to English"
+    return ""
+
+
 def local_ip():
     """The address other machines in the LAN reach this one by. No packet is sent."""
     try:
@@ -215,6 +223,7 @@ class Client:
             await asyncio.sleep(TICK)
             char = self.char
             events = await asyncio.to_thread(self.watcher.poll, self.cfg["client"]["log_dir"], char)
+            self.out({"type": "warning", "text": _warning(char, self.watcher)})
             if self.writer:
                 self.writer.write(_line({"type": "events", "listeners": [char] if char else [], "events": events}))
                 continue

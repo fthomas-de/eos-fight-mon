@@ -168,6 +168,9 @@ class App:
         self.status = tk.StringVar()
         tk.Label(self.bar, textvariable=self.status, bg=th["panel"], fg=th["fg"], font=(FONT, 10)).pack(
             side="left", padx=10)
+        self.warning = tk.StringVar()
+        tk.Label(self.bar, textvariable=self.warning, bg=th["panel"], fg=COLORS["dmg"],
+                 font=(FONT, 10, "bold")).pack(side="left", padx=10)
         self._button(self.bar, "Settings", self._settings).pack(side="right", padx=4, pady=4)
         self._button(self.bar, "Replays", lambda: self.call(backend.history)).pack(side="right", padx=4)
         if mode == "server":  # only the server may end a fight early
@@ -226,6 +229,8 @@ class App:
                     self.live = []
                 elif kind == "status":
                     self.status.set(msg["text"])
+                elif kind == "warning":
+                    self.warning.set(msg["text"])
                 elif kind == "history":
                     self._history(msg["sessions"])
                 elif kind == "session":

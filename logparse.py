@@ -109,11 +109,18 @@ class LogWatcher:
         self.active_secs = active_secs
         self.files = {}  # path -> [offset, unfinished line]
         self._key = None
+        self.combat = self.parsed = 0  # combat lines seen / understood, to spot a log in another language
+
+    @property
+    def foreign(self):
+        """Plenty of combat lines and not one understood: the EVE client writes another language."""
+        return self.combat >= 10 and not self.parsed
 
     def poll(self, log_dir, char):
         first = (log_dir, char) != self._key
         if first:  # other folder or character: forget offsets, skip the past
             self._key, self.files = (log_dir, char), {}
+            self.combat = self.parsed = 0
         now, events = time.time(), []
         if not char:
             return events
@@ -140,6 +147,10 @@ class LogWatcher:
             f[0] += len(data)
             *lines, f[1] = (f[1] + data).split(b"\n")
             for raw in lines:
-                if e := parse(raw.decode("utf-8", "replace").rstrip("\r"), char):
+                line = raw.decode("utf-8", "replace").rstrip("\r")
+                if e := parse(line, char):
                     events.append(e)
+                    self.parsed += 1
+                if "(combat)" in line and " misses " not in line:  # misses are not parsed on purpose
+                    self.combat += 1
         return events
