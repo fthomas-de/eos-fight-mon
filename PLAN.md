@@ -19,7 +19,7 @@ Live view of the current EVE fight without affecting game performance. One execu
 - **One file, three modes**: client, server with window, server without window (`--headless`).
 - **One instance = one character** (dropdown / `--char`), so several accounts run side by side.
 - **Client** sends the parsed events every 2 s. Without a server it shows its own ship and enemies only and stores nothing.
-- **Server** decides what a fight is (start with the first event, end after 60 s idle or *Reset*), merges per tick and sends the same picture to all clients. Events between two clients count only from the source's log.
+- **Server** decides what a fight is (start with the first event, end after 60 s idle or *Reset* on the server only), merges per tick and sends the same picture to all clients. Events between two clients count only from the source's log.
 - **Sides**: left the clients' characters (`Listener:` in the log header), right everyone else.
 - **Drones**: damage is logged with the owner as source, so it counts for the owner. Drones acting on their own (e.g. EC drones) or being targeted have no known owner and form one entry on the right.
 - **Replays**: stored on the server as `history/<start UTC>.jsonl.gz`; clients fetch the last 7 days on connect and after each fight. Late clients get the running fight from its start.

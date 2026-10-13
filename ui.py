@@ -170,7 +170,8 @@ class App:
             side="left", padx=10)
         self._button(self.bar, "Settings", self._settings).pack(side="right", padx=4, pady=4)
         self._button(self.bar, "Replays", lambda: self.call(backend.history)).pack(side="right", padx=4)
-        self._button(self.bar, "Reset", lambda: self.call(backend.reset)).pack(side="right", padx=4)
+        if mode == "server":  # only the server may end a fight early
+            self._button(self.bar, "Reset", lambda: self.call(backend.reset)).pack(side="right", padx=4)
         if mode == "client":
             self.enabled = cfg.getboolean("client", "auto_connect")
             self.conn = self._button(self.bar, "", self._toggle)

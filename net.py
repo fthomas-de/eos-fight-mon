@@ -94,9 +94,7 @@ class Server:
                 if kind == "events":
                     self.clients[writer] = {n for n in msg["listeners"][:50] if isinstance(n, str)}
                     self.fight.add(e for e in map(to_event, msg["events"]) if e)
-                elif kind == "reset":
-                    await self.reset()
-                elif kind == "history":
+                elif kind == "history":  # no "reset" here: only the server ends a fight early
                     writer.write(_line({"type": "history", "sessions": list_history(self.fight.history_dir)}))
                 elif kind == "load":
                     name = str(msg.get("name"))
@@ -191,14 +189,8 @@ class Client:
             if tick := self.fight.tick(now):
                 self.out({"type": "tick", **tick})
             if self.fight.ended(now):
-                await self.reset()
-
-    async def reset(self):
-        if self.writer:
-            self.writer.write(_line({"type": "reset"}))
-        else:
-            self.fight.end()
-            self.out({"type": "reset"})
+                self.fight.end()
+                self.out({"type": "reset"})
 
     async def history(self):
         self.out({"type": "history", "sessions": list_history(self.history_dir)})
