@@ -78,8 +78,24 @@ python main.py
 python -m unittest discover -s tests
 ```
 
-Build (Windows `.exe`; for Linux the same without `--windowed`, on a Linux machine):
+Windows build:
 
 ```bash
 python -m PyInstaller --onefile --windowed --name eos-fight-mon main.py
 ```
+
+Linux build (headless server only, no Tk). Built on Linux or WSL with a portable Python from `uv`, so the binary runs on any distribution with glibc 2.17 or newer; a distribution's own Python would tie it to that distribution's glibc:
+
+```bash
+pip install uv pyinstaller
+```
+
+```bash
+uv python install 3.13 && uv venv --python 3.13 venv313 && uv pip install --python venv313/bin/python pyinstaller
+```
+
+```bash
+venv313/bin/python -m PyInstaller --onefile --name eos-fight-mon main.py
+```
+
+On the server: copy the binary, `chmod +x eos-fight-mon`, start `./eos-fight-mon --headless`; `./eos-fight-mon --reset` ends the running fight.
