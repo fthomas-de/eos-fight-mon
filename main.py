@@ -45,10 +45,10 @@ def lower_priority():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--server", action="store_true", help="als Server starten")
-    ap.add_argument("--headless", action="store_true", help="Server ohne Fenster (z. B. Linux)")
-    ap.add_argument("--char", help="Charakter dieser Instanz (sonst der zuletzt aktive)")
-    ap.add_argument("--config", default=str(BASE / "config.ini"), help="Pfad zur config.ini")
+    ap.add_argument("--server", action="store_true", help="run as server")
+    ap.add_argument("--headless", action="store_true", help="server without window (e.g. Linux)")
+    ap.add_argument("--char", help="character of this instance (default: most recently active)")
+    ap.add_argument("--config", default=str(BASE / "config.ini"), help="path to config.ini")
     args = ap.parse_args()
     cfg_path = Path(args.config).resolve()
     os.chdir(BASE)  # relative paths in the config (history) live next to the program
@@ -59,7 +59,7 @@ def main():
     code = f"{net.local_ip()}:{cfg['general']['port']}/{cfg['general']['token']}"
 
     if args.headless:
-        print(f"eos-fight-mon Server läuft. Verbindungscode für die Clients: {code}", flush=True)
+        print(f"eos-fight-mon server running. Connection code for clients: {code}", flush=True)
         asyncio.run(net.Server(cfg, lambda msg: None).run())
         return
 
@@ -75,7 +75,7 @@ def main():
         try:
             loop.run_until_complete(backend.run())
         except Exception as e:  # e.g. port already in use: show it instead of dying silently
-            q.put({"type": "status", "text": f"Fehler: {e}"})
+            q.put({"type": "status", "text": f"error: {e}"})
     threading.Thread(target=run, daemon=True).start()
 
     from ui import App  # only here, so a headless Linux server needs no Tk

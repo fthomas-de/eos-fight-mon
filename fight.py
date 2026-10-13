@@ -13,7 +13,7 @@ WINDOW = 5  # ticks averaged into per-second rates (10 s)
 IDLE_END = 60  # seconds without an event end the fight
 EWAR = {"scram", "point", "jam"}
 REPS = {"shield", "armor", "hull", "cap"}
-DRONES_L, DRONES_R = "Drohnen (L)", "Drohnen (R)"
+DRONES = "Drones (owner unknown)"
 HISTORY_NAME = re.compile(r"\d{8}_\d{6}\.jsonl\.gz")  # fight start in UTC, so names sort by date and time
 # shortcut: drones are recognised by one word of their type name; add a word when a drone shows up as a ship
 _DRONE_WORDS = {
@@ -29,14 +29,16 @@ def is_drone(name):
 
 
 class Fight:
-    def __init__(self, history_dir):
-        self.history_dir = Path(history_dir)
+    def __init__(self, history_dir=None, solo=False):
+        self.history_dir = history_dir and Path(history_dir)  # None: show only, never store (server decides)
+        self.solo = solo  # one client without server: hide friends, keep only own ship and enemies
         self.listeners = set()  # characters of all connected clients
         self.pending = []
         self._reset()
 
     def _reset(self):
         self.ticks, self.left, self.ships, self.last_event = [], set(), {}, 0.0
+        self.friends, self.enemies = set(), set()
 
     def add(self, events):
         self.pending.extend(events)
@@ -48,7 +50,9 @@ class Fight:
         for e in events:
             if e.dst == e.logger and e.src != e.logger and e.src in self.listeners:
                 continue  # the source client logged the same thing
-            key = (e.kind, self._name(e.src, e.src_ship, e.weapon), self._name(e.dst, e.dst_ship, None))
+            if self.solo and e.logger not in (e.src, e.dst):
+                continue  # e.g. a rat pointing a fleet mate: neither own ship nor enemy of it
+            key = (e.kind, self._name(e.src, e.src_ship), self._name(e.dst, e.dst_ship))
             flows[key] = 1 if e.kind in EWAR else flows.get(key, 0) + e.amount
         if flows:
             self.last_event = now
@@ -58,14 +62,19 @@ class Fight:
         start = self.ticks[0]["t"] if self.ticks else int(now)
         tick = {"t": int(now), "start": start, "flows": [[k, s, d, a] for (k, s, d), a in flows.items()],
                 "ships": dict(self.ships), "left": sorted(self.left)}
+        if self.solo:  # whoever only reps with us is a friend; counted in the sums, not drawn
+            for k, s, d in flows:
+                other = {s, d} - self.listeners
+                (self.friends if k in REPS else self.enemies).update(other)
+            tick["hidden"] = sorted(self.friends - self.enemies)
         self.ticks.append(tick)
         return tick
 
-    def _name(self, name, ship, weapon):
-        if weapon and is_drone(weapon):
-            return DRONES_L if name in self.listeners else DRONES_R
+    def _name(self, name, ship):
+        # drone damage is logged with the owner as source, so it counts for the owner already;
+        # only drones acting or targeted on their own have no known owner
         if ship in (None, name) and is_drone(name):
-            return DRONES_R  # owner unknown
+            return DRONES
         if ship:
             self.ships[name] = ship
         return name
@@ -78,7 +87,7 @@ class Fight:
         ticks = self.ticks
         while ticks and not ticks[-1]["flows"]:
             ticks.pop()
-        if ticks:
+        if ticks and self.history_dir:
             save_history(self.history_dir, time.strftime("%Y%m%d_%H%M%S", time.gmtime(ticks[0]["t"])) + ".jsonl.gz",
                          ticks)
         self._reset()

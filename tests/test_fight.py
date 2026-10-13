@@ -1,7 +1,8 @@
 import tempfile
 import unittest
 
-from fight import DRONES_L, DRONES_R, IDLE_END, Fight, list_history, load_history, save_history, to_event
+import pathlib
+from fight import DRONES, IDLE_END, Fight, list_history, load_history, save_history, to_event
 from logparse import Event
 
 
@@ -28,10 +29,23 @@ class FightTest(unittest.TestCase):
                     ev("jam", "Hornet EC-300", "B", 1, "B", "Hornet EC-300"),
                     ev("point", "Rat", "B", 1, "A"), ev("point", "Rat", "B", 1, "B")])
         t = self.f.tick(0)
-        self.assertCountEqual(t["flows"], [["dmg", DRONES_L, "Foe", 20], ["dmg", DRONES_R, "A", 30],
-                                           ["jam", DRONES_R, "B", 1], ["point", "Rat", "B", 1]])
+        self.assertCountEqual(t["flows"], [["dmg", "A", "Foe", 20], ["dmg", "Foe", "A", 30],  # drones: owner
+                                           ["jam", DRONES, "B", 1], ["point", "Rat", "B", 1]])
         self.assertEqual(t["left"], ["A", "B"])
-        self.assertEqual(t["ships"], {"Foe": "Orthrus"})
+        self.assertEqual(t["ships"], {"Foe": "Sentinel"})  # last ship seen wins
+        self.assertNotIn("hidden", t)
+
+    def test_solo_shows_own_ship_and_enemies_only(self):
+        f = Fight(solo=True)
+        f.listeners = {"A"}
+        f.add([ev("dmg", "Foe", "A", 30, "A"), ev("shield", "Mate", "A", 100, "A"),
+               ev("point", "Rat", "Mate", 1, "A"), ev("cap", "A", "Turncoat", 50, "A"),
+               ev("neut", "Turncoat", "A", 10, "A")])
+        t = f.tick(0)
+        self.assertNotIn(["point", "Rat", "Mate", 1], t["flows"])  # does not involve the own ship
+        self.assertEqual(t["hidden"], ["Mate"])  # only reps with us: a friend
+        f.end()
+        self.assertEqual(list(pathlib.Path(self.tmp.name).iterdir()), [])  # never stored
 
     def test_idle_end_and_history(self):
         self.assertIsNone(self.f.tick(0))  # no fight yet

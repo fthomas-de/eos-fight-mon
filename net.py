@@ -4,11 +4,13 @@ import hmac
 import json
 import socket
 import time
+from datetime import datetime, timedelta, timezone
 
 from fight import HISTORY_NAME, TICK, Fight, list_history, load_history, save_history, to_event
 
 CLIENT_LIMIT = 64 * 2**20  # a whole fight comes in one line when replays sync
 SERVER_LIMIT = 2**20
+SYNC_DAYS = 7  # replays older than this are not fetched
 
 
 def _line(msg):
@@ -33,7 +35,7 @@ class Server:
 
     async def run(self):
         srv = await asyncio.start_server(self._handle, port=self.cfg.getint("general", "port"), limit=SERVER_LIMIT)
-        self.out({"type": "status", "text": "Server läuft"})
+        self.out({"type": "status", "text": "server running"})
         async with srv:
             while True:
                 await asyncio.sleep(TICK)
@@ -97,7 +99,8 @@ class Server:
 class Client:
     def __init__(self, cfg, watcher, out, char):
         self.cfg, self.watcher, self.out, self.char = cfg, watcher, out, char
-        self.fight = Fight(cfg["general"]["history_dir"])  # used while not connected
+        self.history_dir = cfg["general"]["history_dir"]  # replays synced from the server
+        self.fight = Fight(solo=True)  # live view while not connected; the server alone decides what a fight is
         self.enabled = cfg.getboolean("client", "auto_connect")
         self.writer = None
         self.wake = asyncio.Event()
@@ -109,7 +112,7 @@ class Client:
             if self.enabled:
                 await self._connect()
             if not self.enabled:
-                self.out({"type": "status", "text": "Verbindung aus – nur eigener Charakter"})
+                self.out({"type": "status", "text": "connection off – own ship only"})
                 await self.wake.wait()
                 continue
             try:
@@ -119,34 +122,35 @@ class Client:
 
     async def _connect(self):
         host, port = self.cfg["client"]["host"], self.cfg.getint("general", "port")
-        self.out({"type": "status", "text": f"verbinde mit {host}:{port} …"})
+        self.out({"type": "status", "text": f"connecting to {host}:{port} …"})
         try:
             reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port, limit=CLIENT_LIMIT), 10)
         except (OSError, TimeoutError, ValueError) as e:
-            self.out({"type": "status", "text": f"getrennt ({e or 'Zeitüberschreitung'}) – neuer Versuch in 15 s"})
+            self.out({"type": "status", "text": f"disconnected ({e or 'timeout'}) – retry in 15 s"})
             return
         writer.write(_line({"type": "hello", "token": self.cfg["general"]["token"]}))
         writer.write(_line({"type": "history"}))
         self.fight.end()
         self.writer = writer
         self.out({"type": "reset"})
-        self.out({"type": "status", "text": f"verbunden mit {host}:{port}"})
-        text = "getrennt – neuer Versuch in 15 s"
+        self.out({"type": "status", "text": f"connected to {host}:{port}"})
+        text = "disconnected – retry in 15 s"
         try:
             async for line in reader:
                 msg = json.loads(line)
                 kind = msg.get("type")
                 if kind == "denied":
-                    text = "Token abgelehnt – Verbindungscode in den Einstellungen prüfen"
+                    text = "token rejected – check the connection code in the settings"
                     break
-                if kind == "history":  # fetch the fights we do not have yet
-                    have = set(list_history(self.fight.history_dir))
+                if kind == "history":  # fetch the recent fights we do not have yet
+                    have = set(list_history(self.history_dir))
+                    since = (datetime.now(timezone.utc) - timedelta(days=SYNC_DAYS)).strftime("%Y%m%d_%H%M%S")
                     for name in msg["sessions"]:
-                        if name not in have and HISTORY_NAME.fullmatch(str(name)):
+                        if HISTORY_NAME.fullmatch(str(name)) and name not in have and name >= since:
                             writer.write(_line({"type": "load", "name": name}))
                 elif kind == "session":
                     if HISTORY_NAME.fullmatch(str(msg.get("name"))) and msg["ticks"]:
-                        save_history(self.fight.history_dir, msg["name"], msg["ticks"])
+                        save_history(self.history_dir, msg["name"], msg["ticks"])
                 else:
                     if kind == "reset":  # the server just stored a fight
                         writer.write(_line({"type": "history"}))
@@ -184,10 +188,10 @@ class Client:
             self.out({"type": "reset"})
 
     async def history(self):
-        self.out({"type": "history", "sessions": list_history(self.fight.history_dir)})
+        self.out({"type": "history", "sessions": list_history(self.history_dir)})
 
     async def load(self, name):
-        self.out({"type": "session", "ticks": load_history(self.fight.history_dir, name)})
+        self.out({"type": "session", "ticks": load_history(self.history_dir, name)})
 
     async def set_enabled(self, on):
         self.enabled = on

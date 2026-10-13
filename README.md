@@ -1,59 +1,60 @@
 # eos-fight-mon
 
-Live-Anzeige des laufenden EVE-Online-Kampfes. Clients lesen ihre Gamelogs, der Server führt alle Clients zusammen.
+Live view of the current EVE Online fight. Clients read their gamelogs, the server merges all clients.
 
-- **Links** die Schiffe aller verbundenen Clients, **rechts** alle anderen, Drohnen je Seite gesammelt.
-- Pfeile für Schaden, Remote-Reps (Schild/Panzer/Hülle/Cap), Neut/Nos sowie Scram/Punkt/Jam (gestrichelt), Werte pro Sekunde über die letzten 10 s.
-- Cockpit oben: Dauer des Kampfes und die Summen des Teams, ein- und ausgehend, pro Sekunde und über den ganzen Kampf.
-- Der Server rechnet in 2-Sekunden-Takten. Nach 60 s ohne Ereignis (oder per *Reset*) wird der Kampf gespeichert. Die Clients holen sich jeden gespeicherten Kampf automatisch; unter *Replays* (sortiert nach Startzeit) lässt er sich mit Start/Stop und Schieberegler abspielen.
-- Eigene Drohnen landen links, fremde rechts. Das Layout ist auf Teams um 10 Schiffe ausgelegt.
-- Läuft mit niedriger Prozesspriorität, liest nur die Logdateien (kein Zugriff aufs Spiel), etwa 5 ms Arbeit alle 2 s.
+- **Left**: the ships of all connected clients. **Right**: everyone else. Drone damage counts for the drone's owner; drones whose owner the log does not name are grouped on the right.
+- Arrows for damage, remote reps (shield/armor/hull/cap), neut/nos and scram/point/jam (dashed), as per-second rates over the last 10 s.
+- Cockpit on top: fight clock and the team's incoming/outgoing sums, per second and for the whole fight.
+- The server works in 2 s ticks and alone decides what a fight is: it starts with the first event and ends after 60 s without one (or on *Reset*). Clients fetch every stored fight of the last 7 days automatically; *Replays* (newest first) plays them with start/stop and a slider.
+- Without a server connection a client shows only its own ship on the left and its enemies on the right; ships that only rep it are hidden (their reps still count in the cockpit). Nothing is stored then.
+- Layout is made for teams of about 10.
+- Runs at below-normal priority and only reads the gamelogs (no access to the game), about 5 ms of work every 2 s.
 
 ## Start
 
-Nur `eos-fight-mon.exe` in einen Ordner legen und doppelklicken. Beim ersten Start entsteht daneben `config.ini`.
+Put `eos-fight-mon.exe` in a folder and double-click it. `config.ini` is created next to it on first start.
 
-| Start | Wofür |
+| Start | Use |
 |---|---|
-| `eos-fight-mon.exe` | Client: liest Logs, sendet an den Server, zeigt die gemeinsame Lage |
-| `eos-fight-mon.exe --server` | Server mit Fenster (bei einem Spieler unter Windows) |
-| `eos-fight-mon --headless` | Server ohne Fenster (z. B. Linux-Server) |
+| `eos-fight-mon.exe` | client: reads logs, sends them to the server, shows the merged fight |
+| `eos-fight-mon.exe --server` | server with window (e.g. on one player's Windows PC) |
+| `eos-fight-mon --headless` | server without window (e.g. Linux server) |
 
-Jede Client-Instanz gehört zu genau einem Charakter (Dropdown oben links, gefüllt aus den Gamelogs des letzten Tages). Für mehrere Accounts einfach mehrere Instanzen starten, z. B. per Verknüpfung mit `eos-fight-mon.exe --char "Name"`.
+Every client instance belongs to exactly one character (dropdown top left, filled from the gamelogs of the last day). For several accounts start several instances, e.g. via shortcuts with `eos-fight-mon.exe --char "Name"`.
 
-Ohne Serververbindung zeigt der Client nur den eigenen Charakter. Der Knopf *Verbindung* schaltet die Verbindung bzw. den Neuversuch alle 15 s an und aus.
+The *Connection* button turns the connection and its retry every 15 s on and off.
 
-**Verbinden:** Der Server zeigt oben einen Verbindungscode `IP:Port/Token` mit *Kopieren*-Knopf (bzw. gibt ihn ohne Fenster auf der Konsole aus). Im Client unter *Einstellungen* in das Feld *Server-Adresse* einfügen und speichern. Die angezeigte IP ist die im lokalen Netz; über das Internet braucht es die öffentliche IP und eine Portweiterleitung am Router.
+**Connecting:** the server shows a connection code `IP:port/token` with a *Copy* button (the headless server prints it). Paste it into *Server address* in the client's *Settings* and save. The IP shown is the LAN address; over the internet use the public IP and forward the port on the router.
 
-Das Tool liest nur die Gamelogs und schreibt nur neben sich selbst (`config.ini`, `history/`).
+The tool only reads the gamelogs and only writes next to itself (`config.ini`, `history/`).
 
 ## config.ini
 
 ```ini
 [general]
-# client oder server
+# client or server
 mode = client
 port = 47110
-# wird beim ersten Start erzeugt; der Token des Servers muss in jeden Client
+# created on first start; the server's token must be in every client
 token = …
 history_dir = history
 
 [client]
-# Adresse des Servers
+# address of the server
 host = localhost
 log_dir = ~/Documents/EVE/logs/Gamelogs
 auto_connect = yes
 ```
 
-Alles lässt sich auch im Fenster unter *Einstellungen* ändern. Der Server muss auf dem Port per TCP erreichbar sein.
+Everything can also be changed in the window under *Settings*. The server must be reachable on the port via TCP.
 
-## Was das Log nicht hergibt
+## Not in the log
 
-Webs, Dämpfer, Painter, Tracking Disruptors und Flottenboosts stehen nicht im Kampf-Log und werden daher nicht angezeigt.
+Webs, damps, painters, tracking disruptors and fleet boosts are not written to the combat log and therefore not shown.
 
-## Entwicklung
+## Development
 
-Nur Python-Standardbibliothek (3.11+).
+Python standard library only (3.11+).
 
 ```bash
 python main.py
@@ -63,7 +64,7 @@ python main.py
 python -m unittest discover -s tests
 ```
 
-Build (Windows `.exe`; für Linux dasselbe ohne `--windowed` auf einem Linux-Rechner):
+Build (Windows `.exe`; for Linux the same without `--windowed`, on a Linux machine):
 
 ```bash
 python -m PyInstaller --onefile --windowed --name eos-fight-mon main.py
