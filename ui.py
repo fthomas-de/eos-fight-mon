@@ -326,7 +326,8 @@ class App:
     def _settings(self):
         top = self._dialog("Settings")
         fields = [("Mode", "general", "mode"), ("Server address or connection code", "client", "host"),
-                  ("Port", "general", "port"), ("Token", "general", "token"), ("Log folder", "client", "log_dir")]
+                  ("Port", "general", "port"), ("Token", "general", "token"), ("Fight ends after idle seconds", "general", "idle_end"),
+                  ("Log folder", "client", "log_dir")]  # log folder last: the browse button sits in its row
         values = {}
         for row, (label, sec, key) in enumerate(fields):
             tk.Label(top, text=label, bg=self.th["bg"], fg=self.th["fg"]).grid(row=row, column=0, sticky="w",
@@ -350,12 +351,16 @@ class App:
             if not port.isdigit() or not 0 < int(port) < 65536:
                 messagebox.showerror("Settings", "Port must be a number from 1 to 65535.", parent=top)
                 return
+            idle = values[("general", "idle_end")].get().strip()
+            if not idle.isdigit() or not 5 <= int(idle) <= 3600:
+                messagebox.showerror("Settings", "Idle seconds must be a number from 5 to 3600.", parent=top)
+                return
             for (sec, key), var in values.items():
                 self.cfg[sec][key] = var.get().strip()
             with open(self.cfg_path, "w", encoding="utf-8") as fh:
                 self.cfg.write(fh)
-            messagebox.showinfo("Settings", "Saved. Client settings apply from the next connection, "
-                                "mode and server port after a restart.", parent=top)
+            messagebox.showinfo("Settings", "Saved. Idle seconds apply at once, client settings from the next "
+                                "connection, mode and server port after a restart.", parent=top)
             top.destroy()
         self._button(top, "Save", save).grid(row=len(fields), column=1, sticky="e", padx=10, pady=10)
 

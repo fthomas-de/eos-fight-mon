@@ -5,7 +5,7 @@ Live view of the current EVE Online fight. Clients read their gamelogs, the serv
 - **Left**: the ships of all connected clients. **Right**: everyone else. Drone damage counts for the drone's owner; drones whose owner the log does not name are grouped on the right.
 - Arrows for damage, remote reps (shield/armor/hull/cap), neut/nos and scram/point/jam (dashed), as per-second rates over the last 10 s.
 - Cockpit on top: fight clock and the team's incoming/outgoing sums, per second and for the whole fight.
-- The server works in 2 s ticks and alone decides what a fight is: it starts with the first event and ends after 60 s without one (or when *Reset* is pressed on the server; clients have no reset). Clients fetch every stored fight of the last 7 days automatically; *Replays* (newest first) plays them with start/stop and a slider.
+- The server works in 2 s ticks and alone decides what a fight is: it starts with the first event and ends after 60 s without one (`idle_end`, adjustable in *Settings*) (or when *Reset* is pressed on the server; clients have no reset). Clients fetch every stored fight of the last 7 days automatically; *Replays* (newest first) plays them with start/stop and a slider.
 - Without a server connection a client shows only its own ship on the left and its enemies on the right; ships that only rep it are hidden (their reps still count in the cockpit). Nothing is stored then.
 - Friendly fire is not shown: hostile effects between clients and ships that rep with them are dropped.
 - Layout is made for teams of about 10.
@@ -47,6 +47,8 @@ port = 47110
 # created on first start; the server's token must be in every client
 token = …
 history_dir = history
+# seconds without an event that end a fight (5-3600)
+idle_end = 60
 # server only: address clients use, e.g. a DynDNS name; empty = ask api.ipify.org
 public_address =
 

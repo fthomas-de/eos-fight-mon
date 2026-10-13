@@ -15,7 +15,7 @@ import net
 BASE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 DEFAULTS = {
     "general": {"mode": "client", "port": "47110", "token": "", "history_dir": "history",
-                "public_address": ""},
+                "public_address": "", "idle_end": "60"},
     "client": {"host": "localhost", "log_dir": "~/Documents/EVE/logs/Gamelogs", "auto_connect": "yes"},
 }
 

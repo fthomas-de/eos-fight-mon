@@ -8,7 +8,7 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from fight import HISTORY_NAME, TICK, Fight, list_history, load_history, save_history, to_event
+from fight import HISTORY_NAME, IDLE_END, TICK, Fight, list_history, load_history, save_history, to_event
 
 CLIENT_LIMIT = 64 * 2**20  # a whole fight comes in one line when replays sync
 SERVER_LIMIT = 2**20
@@ -17,6 +17,14 @@ SYNC_DAYS = 7  # replays older than this are not fetched
 
 def _line(msg):
     return json.dumps(msg, separators=(",", ":")).encode() + b"\n"
+
+
+def idle_end(cfg):
+    """Seconds without an event that end a fight; read every tick so a change in the settings applies at once."""
+    try:
+        return max(5, cfg.getint("general", "idle_end"))
+    except ValueError:  # hand-edited garbage in config.ini
+        return IDLE_END
 
 
 def local_ip():
@@ -56,7 +64,7 @@ class Server:
                 self.fight.listeners = set().union(*self.clients.values())
                 if tick := self.fight.tick(now):
                     self._broadcast({"type": "tick", **tick})
-                if self.fight.ended(now):
+                if self.fight.ended(now, idle_end(self.cfg)):
                     await self.reset()
 
     async def reset(self):
@@ -188,7 +196,7 @@ class Client:
             self.fight.add(events)
             if tick := self.fight.tick(now):
                 self.out({"type": "tick", **tick})
-            if self.fight.ended(now):
+            if self.fight.ended(now, idle_end(self.cfg)):
                 self.fight.end()
                 self.out({"type": "reset"})
 

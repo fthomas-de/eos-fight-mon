@@ -10,7 +10,7 @@ from logparse import KINDS, Event
 
 TICK = 2  # seconds
 WINDOW = 5  # ticks averaged into per-second rates (10 s)
-IDLE_END = 60  # seconds without an event end the fight
+IDLE_END = 60  # default seconds without an event that end the fight
 EWAR = {"scram", "point", "jam"}
 REPS = {"shield", "armor", "hull", "cap"}
 DRONES = "Drones (owner unknown)"
@@ -82,8 +82,8 @@ class Fight:
             self.ships[name] = ship
         return name
 
-    def ended(self, now):
-        return bool(self.ticks) and now - self.last_event >= IDLE_END
+    def ended(self, now, idle_end=IDLE_END):
+        return bool(self.ticks) and now - self.last_event >= idle_end
 
     def end(self):
         """Store the running fight (without its idle tail) and wait for the next one."""
