@@ -1,0 +1,82 @@
+"""eos-fight-mon: live EVE fight display. Clients read their gamelogs, the server merges all clients."""
+import argparse
+import asyncio
+import configparser
+import os
+import queue
+import secrets
+import sys
+import threading
+from pathlib import Path
+
+import logparse
+import net
+
+BASE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+DEFAULTS = {
+    "general": {"mode": "client", "port": "47110", "token": "", "history_dir": "history"},
+    "client": {"host": "localhost", "log_dir": "~/Documents/EVE/logs/Gamelogs", "auto_connect": "yes"},
+}
+
+
+def load_config(path):
+    """Read the config, fill in missing keys and write it back so it is always complete."""
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.read_dict(DEFAULTS)
+    cfg.read(path, encoding="utf-8")
+    if not cfg["general"]["token"]:
+        cfg["general"]["token"] = secrets.token_urlsafe(16)  # copy the server's token to every client
+    with open(path, "w", encoding="utf-8") as fh:
+        cfg.write(fh)
+    return cfg
+
+
+def lower_priority():
+    """The game always wins the CPU."""
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.windll.kernel32
+        k.SetPriorityClass.argtypes = (wintypes.HANDLE, wintypes.DWORD)  # untyped, the 64-bit handle gets mangled
+        k.SetPriorityClass(wintypes.HANDLE(-1), 0x4000)  # own process, BELOW_NORMAL_PRIORITY_CLASS
+    else:
+        os.nice(5)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--server", action="store_true", help="als Server starten")
+    ap.add_argument("--headless", action="store_true", help="Server ohne Fenster (z. B. Linux)")
+    ap.add_argument("--config", default=str(BASE / "config.ini"), help="Pfad zur config.ini")
+    args = ap.parse_args()
+    cfg_path = Path(args.config).resolve()
+    os.chdir(BASE)  # relative paths in the config (history) live next to the program
+    cfg = load_config(cfg_path)
+    mode = "server" if args.server or args.headless or cfg["general"]["mode"] == "server" else "client"
+    lower_priority()
+
+    if args.headless:
+        print(f"eos-fight-mon Server auf Port {cfg['general']['port']}, Token in {cfg_path}", flush=True)
+        asyncio.run(net.Server(cfg, lambda msg: None).run())
+        return
+
+    q = queue.Queue()
+    if mode == "server":
+        backend = net.Server(cfg, q.put)
+    else:
+        backend = net.Client(cfg, logparse.LogWatcher(), q.put)
+    loop = asyncio.new_event_loop()
+
+    def run():
+        try:
+            loop.run_until_complete(backend.run())
+        except Exception as e:  # e.g. port already in use: show it instead of dying silently
+            q.put({"type": "status", "text": f"Fehler: {e}"})
+    threading.Thread(target=run, daemon=True).start()
+
+    from ui import App  # only here, so a headless Linux server needs no Tk
+    App(mode, backend, loop, q, cfg, cfg_path).root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
