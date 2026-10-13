@@ -60,7 +60,7 @@ def main():
     ap.add_argument("--server", action="store_true", help="run as server")
     ap.add_argument("--headless", action="store_true", help="server without window (e.g. Linux)")
     ap.add_argument("--reset", action="store_true", help="end the running fight of the server on this machine")
-    ap.add_argument("--geometry", help="window size and place, WxH+X+Y or zoomed (kept on restart)")
+    ap.add_argument("--geometry", help="window size and place, WxH+X+Y or \"zoomed WxH+X+Y\" (kept on restart)")
     ap.add_argument("--char", help="character of this instance (default: most recently active)")
     ap.add_argument("--version", action="version", version=f"eos-fight-mon {update.VERSION}")
     ap.add_argument("--config", default=str(BASE / "config.ini"), help="path to config.ini")

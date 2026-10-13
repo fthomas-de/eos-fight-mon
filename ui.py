@@ -213,10 +213,16 @@ class App:
         root.geometry("1150x720")
         if cfg.has_section("windows"):  # last place of this window, unless a restart passed one
             geometry = geometry or cfg["windows"].get(self._window_key(getattr(backend, "char", None)))
-        if geometry == "zoomed":
+        # "zoomed WxH+X+Y": the normal place picks the monitor the window maximizes on
+        geometry = geometry or ""
+        self._normal_geo = None  # last place while neither maximized nor minimized
+        if (m := re.fullmatch(r"\d+x\d+\+(-?\d+)\+(-?\d+)", geometry.removeprefix("zoomed").strip())) \
+                and _on_screen(*map(int, m.groups())):
+            self._normal_geo = m.group()
+            root.geometry(self._normal_geo)
+        if geometry.startswith("zoomed"):
             root.state("zoomed")
-        elif (m := re.fullmatch(r"\d+x\d+\+(-?\d+)\+(-?\d+)", geometry or "")) and _on_screen(*map(int, m.groups())):
-            root.geometry(geometry)
+        root.bind("<Configure>", self._track_place, add="+")
         root.protocol("WM_DELETE_WINDOW", self._close)
         root.configure(bg=th["bg"])
 
@@ -337,9 +343,14 @@ class App:
         # one entry per character, since several client instances run side by side
         return "server" if self.mode == "server" else char or "client"
 
+    def _track_place(self, event):
+        if event.widget is self.root and self.root.state() == "normal":
+            self._normal_geo = self.root.geometry()
+
     def _save_window(self):
-        root = self.root
-        geometry = "zoomed" if root.state() == "zoomed" else root.geometry()
+        state = self.root.state()
+        normal = self.root.geometry() if state == "normal" else self._normal_geo or ""
+        geometry = f"zoomed {normal}".strip() if state == "zoomed" else normal
         key = self._window_key(self._char())
         try:
             update_config(self.cfg_path, {"windows": {key: geometry,
