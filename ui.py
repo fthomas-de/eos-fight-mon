@@ -137,7 +137,7 @@ def fight_label(name):
 
 
 class App:
-    def __init__(self, mode, backend, loop, q, cfg, cfg_path, connect_code=None, restart=None):
+    def __init__(self, mode, backend, loop, q, cfg, cfg_path, connect_code=None, restart=None, geometry=None):
         self.mode, self.backend, self.loop, self.q = mode, backend, loop, q
         self._restart = restart
         self.cfg, self.cfg_path = cfg, cfg_path
@@ -146,8 +146,12 @@ class App:
         self.replay, self.pos, self.playing, self._timer = None, 0, False, None
 
         root = self.root = tk.Tk()
-        root.geometry("1150x720")
         root.minsize(900, 560)
+        root.geometry("1150x720")
+        if geometry == "zoomed":
+            root.state("zoomed")
+        elif geometry and re.fullmatch(r"\d+x\d+[+-]-?\d+[+-]-?\d+", geometry):
+            root.geometry(geometry)
         root.configure(bg=th["bg"])
 
         self.bar = tk.Frame(root, bg=th["panel"])
@@ -209,8 +213,9 @@ class App:
 
     def restart(self, char):
         """Reopen the window as a fresh program, e.g. after switching between client and server."""
-        self._restart(char)
-        self.root.destroy()
+        root = self.root
+        self._restart(char, "zoomed" if root.state() == "zoomed" else root.geometry())  # same size and place
+        root.destroy()
 
     def _copy(self, text):
         self.root.clipboard_clear()

@@ -33,10 +33,10 @@ def load_config(path):
     return cfg
 
 
-def restart(cfg_path, char):
+def restart(cfg_path, char, geometry):
     """Start a fresh copy; the config's mode decides now, so --server is not passed on."""
     cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, str(Path(__file__).resolve())]
-    cmd += ["--config", str(cfg_path)] + (["--char", char] if char else [])
+    cmd += ["--config", str(cfg_path), "--geometry", geometry] + (["--char", char] if char else [])
     # a one-file build must unpack itself anew instead of reusing this instance's folder, which goes away
     subprocess.Popen(cmd, env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
 
@@ -58,6 +58,7 @@ def main():
     ap.add_argument("--server", action="store_true", help="run as server")
     ap.add_argument("--headless", action="store_true", help="server without window (e.g. Linux)")
     ap.add_argument("--reset", action="store_true", help="end the running fight of the server on this machine")
+    ap.add_argument("--geometry", help="window size and place, WxH+X+Y or zoomed (kept on restart)")
     ap.add_argument("--char", help="character of this instance (default: most recently active)")
     ap.add_argument("--config", default=str(BASE / "config.ini"), help="path to config.ini")
     args = ap.parse_args()
@@ -94,7 +95,8 @@ def main():
     threading.Thread(target=run, daemon=True).start()
 
     from ui import App  # only here, so a headless Linux server needs no Tk
-    App(mode, backend, loop, q, cfg, cfg_path, code, lambda char: restart(cfg_path, char)).root.mainloop()
+    App(mode, backend, loop, q, cfg, cfg_path, code, lambda char, geo: restart(cfg_path, char, geo),
+        args.geometry).root.mainloop()
 
 
 if __name__ == "__main__":
