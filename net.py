@@ -1,9 +1,11 @@
 """TCP, one JSON message per line. Clients send events every tick, the server answers with merged ticks."""
 import asyncio
 import hmac
+import ipaddress
 import json
 import socket
 import time
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from fight import HISTORY_NAME, TICK, Fight, list_history, load_history, save_history, to_event
@@ -18,13 +20,24 @@ def _line(msg):
 
 
 def local_ip():
-    """The address other machines reach this one by (LAN). No packet is sent."""
+    """The address other machines in the LAN reach this one by. No packet is sent."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("10.255.255.255", 1))
             return s.getsockname()[0]
     except OSError:
         return "127.0.0.1"
+
+
+def public_address(cfg):
+    """The address clients on the internet use: from the config (e.g. a DynDNS name), else asked from ipify."""
+    if addr := cfg["general"]["public_address"].strip():
+        return addr
+    try:
+        with urllib.request.urlopen("https://api.ipify.org", timeout=3) as r:
+            return str(ipaddress.ip_address(r.read(64).decode().strip()))
+    except (OSError, ValueError):
+        return local_ip()  # offline: at least the LAN address
 
 
 class Server:

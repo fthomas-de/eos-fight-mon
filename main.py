@@ -14,7 +14,8 @@ import net
 
 BASE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 DEFAULTS = {
-    "general": {"mode": "client", "port": "47110", "token": "", "history_dir": "history"},
+    "general": {"mode": "client", "port": "47110", "token": "", "history_dir": "history",
+                "public_address": ""},
     "client": {"host": "localhost", "log_dir": "~/Documents/EVE/logs/Gamelogs", "auto_connect": "yes"},
 }
 
@@ -56,7 +57,8 @@ def main():
     mode = "server" if args.server or args.headless or cfg["general"]["mode"] == "server" else "client"
     lower_priority()
 
-    code = f"{net.local_ip()}:{cfg['general']['port']}/{cfg['general']['token']}"
+    # only the server asks for its public address
+    code = mode == "server" and f"{net.public_address(cfg)}:{cfg['general']['port']}/{cfg['general']['token']}"
 
     if args.headless:
         print(f"eos-fight-mon server running. Connection code for clients: {code}", flush=True)

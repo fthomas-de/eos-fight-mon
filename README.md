@@ -7,6 +7,7 @@ Live view of the current EVE Online fight. Clients read their gamelogs, the serv
 - Cockpit on top: fight clock and the team's incoming/outgoing sums, per second and for the whole fight.
 - The server works in 2 s ticks and alone decides what a fight is: it starts with the first event and ends after 60 s without one (or on *Reset*). Clients fetch every stored fight of the last 7 days automatically; *Replays* (newest first) plays them with start/stop and a slider.
 - Without a server connection a client shows only its own ship on the left and its enemies on the right; ships that only rep it are hidden (their reps still count in the cockpit). Nothing is stored then.
+- Friendly fire is not shown: hostile effects between clients and ships that rep with them are dropped.
 - Layout is made for teams of about 10.
 - Runs at below-normal priority and only reads the gamelogs (no access to the game), about 5 ms of work every 2 s.
 
@@ -24,7 +25,15 @@ Every client instance belongs to exactly one character (dropdown top left, fille
 
 The *Connection* button turns the connection and its retry every 15 s on and off.
 
-**Connecting:** the server shows a connection code `IP:port/token` with a *Copy* button (the headless server prints it). Paste it into *Server address* in the client's *Settings* and save. The IP shown is the LAN address; over the internet use the public IP and forward the port on the router.
+**Connecting:** the server shows a connection code `address:port/token` with a *Copy* button (the headless server prints it). Paste it into *Server address* in the client's *Settings* and save.
+
+The address in the code is the server's public internet address, asked from api.ipify.org on start. If the server has a fixed name (e.g. DynDNS), put it in `public_address` in `config.ini`; then nothing is asked. For clients to reach the server from outside:
+
+- the TCP port (default 47110) must be open in the server's firewall (Windows asks on first start, allow it),
+- on a home connection the router must forward that port to the server PC,
+- on a rented Linux server the provider's firewall must allow it.
+
+The connection is not encrypted; the token keeps strangers out, but anyone who can read the traffic could read fight data and the token.
 
 The tool only reads the gamelogs and only writes next to itself (`config.ini`, `history/`).
 
@@ -38,6 +47,8 @@ port = 47110
 # created on first start; the server's token must be in every client
 token = …
 history_dir = history
+# server only: address clients use, e.g. a DynDNS name; empty = ask api.ipify.org
+public_address =
 
 [client]
 # address of the server

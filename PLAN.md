@@ -25,6 +25,8 @@ Live view of the current EVE fight without affecting game performance. One execu
 - **Replays**: stored on the server as `history/<start UTC>.jsonl.gz`; clients fetch the last 7 days on connect and after each fight. Late clients get the running fight from its start.
 - **Cockpit**: clock plus team sums in/out, per second and total.
 - **Connection code** `IP:port/token` to copy, instead of a browser link (that would need a registry entry).
+- **Friendly fire** (hostile effects between clients and their rep partners) is dropped.
+- **Internet**: server listens on all interfaces; connection code uses the public address (`public_address` or api.ipify.org). No TLS.
 - **Neut direction** from the colour: red = incoming, cyan = outgoing (checked against real logs).
 - **Ticks by arrival**, not by log timestamp (client clocks need not agree).
 - **Security**: shared token, every event from the network is checked, replays only by listed file names.

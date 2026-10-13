@@ -38,7 +38,7 @@ class Fight:
 
     def _reset(self):
         self.ticks, self.left, self.ships, self.last_event = [], set(), {}, 0.0
-        self.friends, self.enemies = set(), set()
+        self.friends = set()
 
     def add(self, events):
         self.pending.extend(events)
@@ -46,12 +46,18 @@ class Fight:
     def tick(self, now):
         """Fold the pending events into one tick. None while no fight is running."""
         events, self.pending = self.pending, []
+        for e in events:  # whoever reps with a client is on our side; known before judging this tick's shots
+            if e.kind in REPS:
+                self.friends |= {e.src, e.dst} - self.listeners
+        ours = self.listeners | self.friends
         flows = {}
         for e in events:
             if e.dst == e.logger and e.src != e.logger and e.src in self.listeners:
                 continue  # the source client logged the same thing
             if self.solo and e.logger not in (e.src, e.dst):
                 continue  # e.g. a rat pointing a fleet mate: neither own ship nor enemy of it
+            if e.kind not in REPS and e.src in ours and e.dst in ours:
+                continue  # friendly fire is not shown
             key = (e.kind, self._name(e.src, e.src_ship), self._name(e.dst, e.dst_ship))
             flows[key] = 1 if e.kind in EWAR else flows.get(key, 0) + e.amount
         if flows:
@@ -62,11 +68,8 @@ class Fight:
         start = self.ticks[0]["t"] if self.ticks else int(now)
         tick = {"t": int(now), "start": start, "flows": [[k, s, d, a] for (k, s, d), a in flows.items()],
                 "ships": dict(self.ships), "left": sorted(self.left)}
-        if self.solo:  # whoever only reps with us is a friend; counted in the sums, not drawn
-            for k, s, d in flows:
-                other = {s, d} - self.listeners
-                (self.friends if k in REPS else self.enemies).update(other)
-            tick["hidden"] = sorted(self.friends - self.enemies)
+        if self.solo:  # friends: counted in the sums, not drawn
+            tick["hidden"] = sorted(self.friends)
         self.ticks.append(tick)
         return tick
 

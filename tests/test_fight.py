@@ -35,6 +35,11 @@ class FightTest(unittest.TestCase):
         self.assertEqual(t["ships"], {"Foe": "Sentinel"})  # last ship seen wins
         self.assertNotIn("hidden", t)
 
+    def test_friendly_fire_is_dropped(self):
+        self.f.add([ev("dmg", "A", "B", 50, "A"), ev("shield", "Mate", "B", 100, "B"),
+                    ev("dmg", "A", "Mate", 30, "A"), ev("dmg", "Foe", "A", 20, "A")])
+        self.assertCountEqual(self.f.tick(0)["flows"], [["shield", "Mate", "B", 100], ["dmg", "Foe", "A", 20]])
+
     def test_solo_shows_own_ship_and_enemies_only(self):
         f = Fight(solo=True)
         f.listeners = {"A"}
@@ -43,7 +48,8 @@ class FightTest(unittest.TestCase):
                ev("neut", "Turncoat", "A", 10, "A")])
         t = f.tick(0)
         self.assertNotIn(["point", "Rat", "Mate", 1], t["flows"])  # does not involve the own ship
-        self.assertEqual(t["hidden"], ["Mate"])  # only reps with us: a friend
+        self.assertNotIn(["neut", "Turncoat", "A", 10], t["flows"])  # friendly fire
+        self.assertEqual(t["hidden"], ["Mate", "Turncoat"])  # reps with us: friends
         f.end()
         self.assertEqual(list(pathlib.Path(self.tmp.name).iterdir()), [])  # never stored
 
