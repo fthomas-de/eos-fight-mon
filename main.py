@@ -5,6 +5,7 @@ import configparser
 import os
 import queue
 import secrets
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -24,12 +25,20 @@ def load_config(path):
     """Read the config, fill in missing keys and write it back so it is always complete."""
     cfg = configparser.ConfigParser(interpolation=None)
     cfg.read_dict(DEFAULTS)
-    cfg.read(path, encoding="utf-8")
+    cfg.read(path, encoding="utf-8-sig")  # tolerate the BOM some Windows editors write
     if not cfg["general"]["token"]:
         cfg["general"]["token"] = secrets.token_urlsafe(16)  # copy the server's token to every client
     with open(path, "w", encoding="utf-8") as fh:
         cfg.write(fh)
     return cfg
+
+
+def restart(cfg_path, char):
+    """Start a fresh copy; the config's mode decides now, so --server is not passed on."""
+    cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, str(Path(__file__).resolve())]
+    cmd += ["--config", str(cfg_path)] + (["--char", char] if char else [])
+    # a one-file build must unpack itself anew instead of reusing this instance's folder, which goes away
+    subprocess.Popen(cmd, env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
 
 
 def lower_priority():
@@ -85,7 +94,7 @@ def main():
     threading.Thread(target=run, daemon=True).start()
 
     from ui import App  # only here, so a headless Linux server needs no Tk
-    App(mode, backend, loop, q, cfg, cfg_path, code).root.mainloop()
+    App(mode, backend, loop, q, cfg, cfg_path, code, lambda char: restart(cfg_path, char)).root.mainloop()
 
 
 if __name__ == "__main__":

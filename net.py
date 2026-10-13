@@ -88,7 +88,15 @@ class Server:
         self.clients = {}  # writer -> characters of that client
 
     async def run(self):
-        srv = await asyncio.start_server(self._handle, port=self.cfg.getint("general", "port"), limit=SERVER_LIMIT)
+        for attempt in range(10):  # after a restart the old copy may hold the port for a moment
+            try:
+                srv = await asyncio.start_server(self._handle, port=self.cfg.getint("general", "port"),
+                                                 limit=SERVER_LIMIT)
+                break
+            except OSError:
+                if attempt == 9:
+                    raise
+                await asyncio.sleep(0.5)
         self.out({"type": "status", "text": "server running"})
         async with srv:
             while True:

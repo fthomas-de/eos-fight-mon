@@ -137,8 +137,9 @@ def fight_label(name):
 
 
 class App:
-    def __init__(self, mode, backend, loop, q, cfg, cfg_path, connect_code=None):
+    def __init__(self, mode, backend, loop, q, cfg, cfg_path, connect_code=None, restart=None):
         self.mode, self.backend, self.loop, self.q = mode, backend, loop, q
+        self._restart = restart
         self.cfg, self.cfg_path = cfg, cfg_path
         self.th = th = THEMES[mode]
         self.live = []  # ticks of the running fight
@@ -205,6 +206,11 @@ class App:
     def _title(self):
         who = f"Client – {self.char.get() or 'no character'}" if self.mode == "client" else "Server"
         self.root.title(f"eos-fight-mon – {who}")
+
+    def restart(self, char):
+        """Reopen the window as a fresh program, e.g. after switching between client and server."""
+        self._restart(char)
+        self.root.destroy()
 
     def _copy(self, text):
         self.root.clipboard_clear()
@@ -360,13 +366,20 @@ class App:
             if not idle.isdigit() or not 5 <= int(idle) <= 3600:
                 messagebox.showerror("Settings", "Idle seconds must be a number from 5 to 3600.", parent=top)
                 return
+            changed = {k for k, var in values.items() if self.cfg[k[0]][k[1]] != var.get().strip()}
             for (sec, key), var in values.items():
                 self.cfg[sec][key] = var.get().strip()
             with open(self.cfg_path, "w", encoding="utf-8") as fh:
                 self.cfg.write(fh)
-            messagebox.showinfo("Settings", "Saved. Idle seconds apply at once, client settings from the next "
-                                "connection, mode and server port after a restart.", parent=top)
             top.destroy()
+            # the rest is read live; a server keeps its running fight unless mode or port change
+            reload = {("general", "mode"), ("general", "port")}
+            if self.mode == "client":
+                reload |= {("client", "host"), ("general", "token")}
+            if changed & reload:
+                self.restart(self.char.get() if self.mode == "client" else None)
+            else:
+                self.status.set("settings saved")
         self._button(top, "Save", save).grid(row=len(fields), column=1, sticky="e", padx=10, pady=10)
 
 
