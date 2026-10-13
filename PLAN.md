@@ -25,10 +25,12 @@ Live view of the current EVE fight without affecting game performance. One execu
 - **Drones**: damage is logged with the owner as source, so it counts for the owner. Drones acting on their own (e.g. EC drones) or being targeted have no known owner and form one entry on the right.
 - **Replays**: stored on the server as `history/<start UTC>.jsonl.gz`; clients fetch the last 7 days on connect and after each fight. Late clients get the running fight from its start.
 - **Cockpit**: clock plus team sums in/out, per second and total, in its own small window.
-- **Always on top** optional, for both windows.
+- **Always on top** optional, for the cockpit only.
+- **Graph** window: per group out/in per second over the fight, small multiples, no second axis.
+- **Server** lists its connections with the picked character.
 - **Self-update** from GitHub releases, only after asking; checked against SHA256SUMS; the running exe is renamed, not overwritten.
 - **Connection code** `IP:port/token` to copy, instead of a browser link (that would need a registry entry).
-- **Friendly fire** (hostile effects between clients and their rep partners) is dropped.
+- **Friendly fire** (hostile effects between clients and their rep partners) is dropped unless `friendly_fire` is on; the server's setting decides for connected clients.
 - **Internet**: server listens on all interfaces; connection code uses the public address (`public_address` or api.ipify.org). No TLS.
 - **Neut direction** from the colour: red = incoming, cyan = outgoing (checked against real logs).
 - **Ticks by arrival**, not by log timestamp (client clocks need not agree).

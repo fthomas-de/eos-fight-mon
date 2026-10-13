@@ -1,4 +1,4 @@
-"""Tk windows: client ships left, everyone else right, effects as arrows in between; a small cockpit window."""
+"""Tk windows: client ships left, everyone else right, effects as arrows in between; small cockpit and graph windows."""
 import asyncio
 import configparser
 import ctypes
@@ -159,6 +159,82 @@ def draw_cockpit(cv, ticks, th):
             cv.create_text(x, y, anchor="e", text=fmt(v), fill=th["fg"], font=(FONT, 10))
 
 
+def series(ticks):
+    """Per tick the team's {(group, outgoing): per second} over the 10 s up to it, the same numbers as the cockpit."""
+    if not ticks:
+        return []
+    left = set(ticks[-1]["left"])
+    group_of = {k: label for label, _, kinds in GROUPS for k in kinds}
+    per_tick = []
+    for t in ticks:
+        sums = defaultdict(float)
+        for k, s, d, a in t["flows"]:
+            if label := group_of.get(k):
+                if s in left:
+                    sums[(label, True)] += a
+                if d in left:
+                    sums[(label, False)] += a
+        per_tick.append(sums)
+    out = []
+    for i in range(len(per_tick)):
+        window = per_tick[max(0, i - WINDOW + 1):i + 1]
+        rates = defaultdict(float)
+        for sums in window:
+            for key, a in sums.items():
+                rates[key] += a / (TICK * len(window))
+        out.append(rates)
+    return out
+
+
+def draw_graph(cv, ticks, th, hover=None):
+    """One small chart per group, out solid and in dashed, over the fight; hover (canvas x) picks the shown tick."""
+    cv.delete("all")
+    w, h = cv.winfo_width(), cv.winfo_height()
+    data = series(ticks)
+    if len(data) < 2:
+        cv.create_text(w / 2, h / 2, text="Waiting for a fight …", fill=th["dim"], font=(FONT, 11))
+        return
+    pad_l, pad_r, top, bottom = 50, 12, 20, 18
+    pw, ph, n = w - pad_l - pad_r, (h - top - bottom) / len(GROUPS), len(data)
+    i = n - 1 if hover is None else max(0, min(n - 1, round((hover - pad_l) / pw * (n - 1))))
+    # legend: the line style tells out from in, not colour alone
+    cv.create_line(pad_l, 10, pad_l + 22, 10, fill=th["fg"], width=2)
+    cv.create_text(pad_l + 28, 10, anchor="w", text="out", fill=th["dim"], font=(FONT, 8))
+    cv.create_line(pad_l + 60, 10, pad_l + 82, 10, fill=th["fg"], width=2, dash=(4, 3))
+    cv.create_text(pad_l + 88, 10, anchor="w", text="in   (per second, last 10 s)", fill=th["dim"], font=(FONT, 8))
+    for g, (label, color_kind, _) in enumerate(GROUPS):
+        y0 = top + g * ph
+        base, height = y0 + ph - 4, ph - 20
+        vmax = max([d[(label, o)] for d in data for o in (True, False)] + [1])
+        cv.create_line(pad_l, base, w - pad_r, base, fill=th["panel"])
+        cv.create_line(pad_l, base - height, w - pad_r, base - height, fill=th["panel"], dash=(1, 3))
+        cv.create_text(pad_l - 6, base, anchor="e", text="0", fill=th["dim"], font=(FONT, 8))
+        cv.create_text(pad_l - 6, base - height, anchor="e", text=fmt(vmax), fill=th["dim"], font=(FONT, 8))
+        cv.create_rectangle(pad_l, y0 + 3, pad_l + 8, y0 + 11, fill=COLORS[color_kind], outline="")
+        cv.create_text(pad_l + 13, y0 + 7, anchor="w", text=label, fill=th["fg"], font=(FONT, 9, "bold"))
+        cv.create_text(w - pad_r, y0 + 7, anchor="e", fill=th["fg"], font=(FONT, 9),
+                       text=f"out {fmt(data[i][(label, True)])}   in {fmt(data[i][(label, False)])}")
+        for outgoing, dash in ((True, None), (False, (4, 3))):
+            pts = [v for j, d in enumerate(data)
+                   for v in (pad_l + pw * j / (n - 1), base - height * d[(label, outgoing)] / vmax)]
+            cv.create_line(*pts, fill=COLORS[color_kind], width=2, dash=dash)
+    t0 = ticks[0]["t"]
+    cv.create_text(pad_l, h - 4, anchor="sw", text="00:00", fill=th["dim"], font=(FONT, 8))
+    cv.create_text(w - pad_r, h - 4, anchor="se", text=_mmss(ticks[-1]["t"] - t0 + TICK), fill=th["dim"],
+                   font=(FONT, 8))
+    if hover is not None:
+        x = pad_l + pw * i / (n - 1)
+        cv.create_line(x, top, x, h - bottom, fill=th["dim"])
+        cv.create_text(x, h - 4, anchor="s", text=_mmss(ticks[i]["t"] - t0 + TICK), fill=th["fg"],
+                       font=(FONT, 8, "bold"))
+
+
+PANELS = {  # small extra windows: title, default size, min size, painter
+    "cockpit": ("Cockpit", "340x124", (280, 120), draw_cockpit),
+    "graph": ("Graph", "460x320", (320, 220), draw_graph),
+}
+
+
 def _arrow(cv, pos, kind, s, d, width, dash=None):
     if s not in pos or d not in pos:
         return
@@ -249,7 +325,8 @@ class App:
         tk.Label(self.bar, textvariable=self.warning, bg=th["panel"], fg=COLORS["dmg"],
                  font=(FONT, 10, "bold")).pack(side="left", padx=10)
         self._button(self.bar, "Settings", self._settings).pack(side="right", padx=4, pady=4)
-        self._button(self.bar, "Cockpit", self._toggle_cockpit).pack(side="right", padx=4)
+        self._button(self.bar, "Graph", lambda: self._toggle_panel("graph")).pack(side="right", padx=4)
+        self._button(self.bar, "Cockpit", lambda: self._toggle_panel("cockpit")).pack(side="right", padx=4)
         self._button(self.bar, "Replays", lambda: self.call(backend.history)).pack(side="right", padx=4)
         if mode == "server":  # only the server may end a fight early
             self._button(self.bar, "Reset", lambda: self.call(backend.reset)).pack(side="right", padx=4)
@@ -258,7 +335,14 @@ class App:
             self.conn = self._button(self.bar, "", self._toggle)
             self.conn.pack(side="right", padx=4)
             self._conn_text()
+        self.panels, self.panel_canvas, self._panel_geo, self._hover = {}, {}, {}, None
         self._title()
+        if mode == "server":  # who is connected, with the character each client picked
+            self.clients = tk.StringVar(value="no client connected")
+            info = tk.Label(root, textvariable=self.clients, bg=th["bg"], fg=th["dim"], font=(FONT, 9),
+                            anchor="w", justify="left")
+            info.pack(fill="x", padx=10, pady=(4, 0))
+            info.bind("<Configure>", lambda e: info.configure(wraplength=e.width - 10))
 
         self.replay_bar = tk.Frame(root, bg=th["panel"])
         self.play_btn = self._button(self.replay_bar, "Stop", self._play_pause)
@@ -274,11 +358,10 @@ class App:
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda e: self.redraw())
 
-        self.cockpit, self._cockpit_geo = None, None
-        saved = cfg["windows"].get(self._window_key(self._char()) + ".cockpit") if cfg.has_section("windows") else None
-        if saved != "off":
-            self._open_cockpit(saved)
-        self._apply_topmost()
+        for name in PANELS:
+            saved = cfg["windows"].get(f"{self._window_key(self._char())}.{name}") if cfg.has_section("windows") else None
+            if saved != "off":
+                self._open_panel(name, saved)
         root.after(100, self._drain)
         if update.can_install() and cfg.getboolean("update", "check"):
             root.after(3000, lambda: self._check_update(manual=False))
@@ -294,41 +377,48 @@ class App:
     def _title(self):
         who = f"Client – {self.char.get() or 'no character'}" if self.mode == "client" else "Server"
         self.root.title(f"eos-fight-mon – {who}")
-        if getattr(self, "cockpit", None):
-            self.cockpit.title(f"Cockpit – {self._char() or 'Server'}")
+        for name, top in self.panels.items():
+            top.title(f"{PANELS[name][0]} – {self._char() or 'Server'}")
 
-    # --- cockpit window ---
+    # --- cockpit and graph windows ---
 
-    def _open_cockpit(self, geometry=None):
-        top = self.cockpit = tk.Toplevel(self.root, bg=self.th["bg"])  # not transient: stays when the main one is minimized
-        top.minsize(280, 120)
-        top.geometry("340x124")
-        geometry = geometry or self._cockpit_geo
+    def _open_panel(self, name, geometry=None):
+        _, size, minsize, _ = PANELS[name]
+        top = self.panels[name] = tk.Toplevel(self.root, bg=self.th["bg"])  # not transient: stays when the main one is minimized
+        top.minsize(*minsize)
+        top.geometry(size)
+        geometry = geometry or self._panel_geo.get(name)
         if (m := re.fullmatch(r"\d+x\d+\+(-?\d+)\+(-?\d+)", geometry or "")) and _on_screen(*map(int, m.groups())):
             top.geometry(geometry)
         if sys.platform == "win32":
             top.attributes("-toolwindow", True)  # thin title bar
-        top.protocol("WM_DELETE_WINDOW", self._toggle_cockpit)
-        self.cockpit_canvas = tk.Canvas(top, bg=self.th["bg"], highlightthickness=0)
-        self.cockpit_canvas.pack(fill="both", expand=True)
-        self.cockpit_canvas.bind("<Configure>", lambda e: self.redraw())
+        top.protocol("WM_DELETE_WINDOW", lambda: self._toggle_panel(name))
+        cv = self.panel_canvas[name] = tk.Canvas(top, bg=self.th["bg"], highlightthickness=0)
+        cv.pack(fill="both", expand=True)
+        cv.bind("<Configure>", lambda e: self.redraw())
+        if name == "graph":
+            cv.bind("<Motion>", lambda e: self._hover_at(e.x))
+            cv.bind("<Leave>", lambda e: self._hover_at(None))
         self._title()
         self._apply_topmost()
 
-    def _toggle_cockpit(self):
-        if self.cockpit:
-            self._cockpit_geo = self.cockpit.geometry()
-            self.cockpit.destroy()
-            self.cockpit = None
+    def _toggle_panel(self, name):
+        if top := self.panels.pop(name, None):
+            self._panel_geo[name] = top.geometry()
+            del self.panel_canvas[name]
+            top.destroy()
         else:
-            self._open_cockpit()
+            self._open_panel(name)
+
+    def _hover_at(self, x):
+        self._hover = x
+        if "graph" in self.panels:
+            draw_graph(self.panel_canvas["graph"], self._ticks(), self.th, x)
 
     def _apply_topmost(self):
-        """Keep the windows above the game (works with EVE in window or fixed window mode, not in fullscreen)."""
-        on = self.cfg.getboolean("general", "always_on_top")
-        for win in (self.root, self.cockpit):
-            if win:
-                win.attributes("-topmost", on)
+        """Keep the cockpit above the game (works with EVE in window or fixed window mode, not in fullscreen)."""
+        if top := self.panels.get("cockpit"):
+            top.attributes("-topmost", self.cfg.getboolean("general", "always_on_top"))
 
     def restart(self, char):
         """Reopen the window as a fresh program, e.g. after switching between client and server."""
@@ -353,8 +443,8 @@ class App:
         geometry = f"zoomed {normal}".strip() if state == "zoomed" else normal
         key = self._window_key(self._char())
         try:
-            update_config(self.cfg_path, {"windows": {key: geometry,
-                                                      key + ".cockpit": self.cockpit.geometry() if self.cockpit else "off"}})
+            update_config(self.cfg_path, {"windows": {key: geometry, **{
+                f"{key}.{name}": self.panels[name].geometry() if name in self.panels else "off" for name in PANELS}}})
         except OSError:
             pass  # a read-only folder must not keep the window from closing
         return geometry
@@ -367,11 +457,17 @@ class App:
     def call(self, fn, *args):
         asyncio.run_coroutine_threadsafe(fn(*args), self.loop)
 
+    def _ticks(self):
+        return self.replay[:self.pos + 1] if self.replay is not None else self.live
+
     def redraw(self):
-        ticks = self.replay[:self.pos + 1] if self.replay is not None else self.live
+        ticks = self._ticks()
         draw(self.canvas, ticks, self.th)
-        if self.cockpit:
-            draw_cockpit(self.cockpit_canvas, ticks, self.th)
+        for name, cv in self.panel_canvas.items():
+            if name == "graph":
+                draw_graph(cv, ticks, self.th, self._hover)
+            else:
+                PANELS[name][3](cv, ticks, self.th)
 
     def _drain(self):
         """Handle what the network thread queued."""
@@ -391,6 +487,10 @@ class App:
                     self._history(msg["sessions"])
                 elif kind == "session":
                     self._start_replay(msg["ticks"])
+                elif kind == "clients":
+                    names = [f"{', '.join(chars) or 'no character yet'} ({addr})" for addr, chars in msg["list"]]
+                    self.clients.set(f"{len(names)} connected:   " + "   ·   ".join(names) if names
+                                     else "no client connected")
                 elif kind == "update":
                     self._offer_update(msg)
                 elif kind == "updated":
@@ -543,7 +643,8 @@ class App:
         top = self._dialog("Settings")
         fields = [("Mode", "general", "mode"), ("Server address or connection code", "client", "host"),
                   ("Port", "general", "port"), ("Token", "general", "token"), ("Fight ends after idle seconds", "general", "idle_end"),
-                  ("Always on top (over EVE in window mode)", "general", "always_on_top"),
+                  ("Cockpit always on top (over EVE in window mode)", "general", "always_on_top"),
+                  ("Show friendly fire (when connected, the server's setting counts)", "general", "friendly_fire"),
                   ("Check for updates at start", "update", "check"),
                   ("Log folder", "client", "log_dir")]  # log folder last: the browse button sits in its row
         values = {}
@@ -554,7 +655,7 @@ class App:
             if key == "mode":
                 ttk.Combobox(top, textvariable=var, values=["client", "server"], state="readonly", width=12).grid(
                     row=row, column=1, sticky="w", padx=10)
-            elif key in ("always_on_top", "check"):
+            elif key in ("always_on_top", "friendly_fire", "check"):
                 var.set("yes" if self.cfg.getboolean(sec, key) else "no")
                 tk.Checkbutton(top, variable=var, onvalue="yes", offvalue="no", bg=self.th["bg"],
                                activebackground=self.th["bg"], selectcolor=self.th["panel"]).grid(

@@ -33,6 +33,7 @@ class Fight:
         self.history_dir = history_dir and Path(history_dir)  # None: show only, never store (server decides)
         self.solo = solo  # one client without server: hide friends, keep only own ship and enemies
         self.listeners = set()  # characters of all connected clients
+        self.friendly_fire = False  # show hostile effects between clients and their rep partners
         self.pending = []
         self._reset()
 
@@ -56,8 +57,8 @@ class Fight:
                 continue  # the source client logged the same thing
             if self.solo and e.logger not in (e.src, e.dst):
                 continue  # e.g. a rat pointing a fleet mate: neither own ship nor enemy of it
-            if e.kind not in REPS and e.src in ours and e.dst in ours:
-                continue  # friendly fire is not shown
+            if not self.friendly_fire and e.kind not in REPS and e.src in ours and e.dst in ours:
+                continue  # friendly fire is not shown unless asked for
             key = (e.kind, self._name(e.src, e.src_ship), self._name(e.dst, e.dst_ship))
             flows[key] = 1 if e.kind in EWAR else flows.get(key, 0) + e.amount
         if flows:

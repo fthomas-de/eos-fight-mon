@@ -5,11 +5,14 @@ Live view of the current EVE Online fight. Clients read their gamelogs, the serv
 - **Left**: the ships of all connected clients. **Right**: everyone else. Drone damage counts for the drone's owner; drones whose owner the log does not name are grouped on the right.
 - Arrows for damage, remote reps (shield/armor/hull/cap), neut/nos and scram/point/jam (dashed), as per-second rates over the last 10 s.
 - Cockpit: a small separate window with the fight clock and the team's incoming/outgoing sums, per second and for the whole fight. The *Cockpit* button opens and closes it; it stays when the main window is minimized and remembers its place per character.
-- *Always on top* in *Settings* keeps both windows above the game. That works with EVE in window or fixed window mode, not in exclusive fullscreen.
+- Graph: a third small window with one chart per group (damage, reps, cap, neut/nos), the team's out (solid) and in (dashed) per second over the fight; move the mouse over it to read the values at that moment. The *Graph* button opens and closes it.
+- *Cockpit always on top* in *Settings* keeps the cockpit window above the game. That works with EVE in window or fixed window mode, not in exclusive fullscreen.
+- Windows reopen on the monitor and at the place they were closed, also when closed maximized or minimized.
+- The server window lists every connected client with the character it picked and its address (the headless server prints the list when it changes).
 - Updates: on start the exe asks GitHub for a newer release and offers to install it. *Yes* downloads it, checks it against `SHA256SUMS.txt`, replaces the exe and restarts; *No* skips that version (*Settings › Check for updates* asks anyway). Other open windows then offer a restart only. Can be turned off (`[update] check`).
 - The server works in 2 s ticks and alone decides what a fight is: it starts with the first event and ends after 60 s without one (`idle_end`, adjustable in *Settings*) (or on *Reset* in the server window / `--reset` on the server machine; clients cannot reset). Clients fetch every stored fight of the last 7 days automatically; *Replays* (newest first) plays them with start/stop and a slider.
 - Without a server connection a client shows only its own ship on the left and its enemies on the right; ships that only rep it are hidden (their reps still count in the cockpit). Nothing is stored then.
-- Friendly fire is not shown: hostile effects between clients and ships that rep with them are dropped.
+- Friendly fire (hostile effects between clients and ships that rep with them) is dropped unless *Show friendly fire* is on. With a server the server's setting counts for everyone.
 - Ship icons (32 px) for every ship type, packed into the exe.
 - Layout is made for teams of about 10.
 - Runs at below-normal priority and only reads the gamelogs (no access to the game), about 5 ms of work every 2 s.
@@ -55,8 +58,10 @@ history_dir = history
 idle_end = 60
 # server only: address clients use, e.g. a DynDNS name; empty = ask api.ipify.org
 public_address =
-# keep the windows above the game
+# keep the cockpit window above the game
 always_on_top = no
+# show damage/ewar between our own ships; on a client it only counts without a server
+friendly_fire = no
 
 [client]
 # address of the server

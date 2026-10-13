@@ -40,6 +40,13 @@ class FightTest(unittest.TestCase):
                     ev("dmg", "A", "Mate", 30, "A"), ev("dmg", "Foe", "A", 20, "A")])
         self.assertCountEqual(self.f.tick(0)["flows"], [["shield", "Mate", "B", 100], ["dmg", "Foe", "A", 20]])
 
+    def test_friendly_fire_on_request(self):
+        self.f.friendly_fire = True
+        self.f.add([ev("dmg", "A", "B", 50, "A"), ev("dmg", "A", "B", 50, "B"), ev("shield", "Mate", "B", 100, "B"),
+                    ev("dmg", "A", "Mate", 30, "A")])
+        self.assertCountEqual(self.f.tick(0)["flows"], [["dmg", "A", "B", 50], ["shield", "Mate", "B", 100],
+                                                        ["dmg", "A", "Mate", 30]])  # still logged once, not twice
+
     def test_solo_shows_own_ship_and_enemies_only(self):
         f = Fight(solo=True)
         f.listeners = {"A"}

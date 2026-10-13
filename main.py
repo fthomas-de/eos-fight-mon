@@ -17,7 +17,7 @@ import update
 BASE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 DEFAULTS = {
     "general": {"mode": "client", "port": "47110", "token": "", "history_dir": "history",
-                "public_address": "", "idle_end": "60", "always_on_top": "no"},
+                "public_address": "", "idle_end": "60", "always_on_top": "no", "friendly_fire": "no"},
     "client": {"host": "localhost", "log_dir": "~/Documents/EVE/logs/Gamelogs", "auto_connect": "yes"},
     "update": {"check": "yes"},
 }
@@ -41,6 +41,13 @@ def restart(cfg_path, char, geometry):
     cmd += ["--config", str(cfg_path), "--geometry", geometry] + (["--char", char] if char else [])
     # a one-file build must unpack itself anew instead of reusing this instance's folder, which goes away
     subprocess.Popen(cmd, env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+
+
+def print_clients(msg):
+    """Headless server: the connections are the only thing worth printing."""
+    if msg.get("type") == "clients":
+        names = [f"{', '.join(chars) or 'no character'} ({addr})" for addr, chars in msg["list"]]
+        print(f"{len(names)} connected: {'; '.join(names) or '-'}", flush=True)
 
 
 def lower_priority():
@@ -86,7 +93,7 @@ def main():
                     print(f"{found[0]} is available: https://github.com/{update.REPO}/releases/latest", flush=True)
             except (OSError, ValueError, KeyError):
                 pass
-        asyncio.run(net.Server(cfg, lambda msg: None).run())
+        asyncio.run(net.Server(cfg, print_clients).run())
         return
 
     q = queue.Queue()

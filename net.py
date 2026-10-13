@@ -27,6 +27,13 @@ def idle_end(cfg):
         return IDLE_END
 
 
+def friendly_fire(cfg):
+    try:
+        return cfg.getboolean("general", "friendly_fire")
+    except ValueError:
+        return False
+
+
 def _is_local(writer):
     ip = ipaddress.ip_address(writer.get_extra_info("peername")[0])
     return (getattr(ip, "ipv4_mapped", None) or ip).is_loopback
@@ -86,6 +93,7 @@ class Server:
         self.cfg, self.out = cfg, out  # out(msg) feeds the local window
         self.fight = Fight(cfg["general"]["history_dir"])
         self.clients = {}  # writer -> characters of that client
+        self._shown = None  # client list last sent to the window
 
     async def run(self):
         for attempt in range(10):  # after a restart the old copy may hold the port for a moment
@@ -103,6 +111,8 @@ class Server:
                 await asyncio.sleep(TICK)
                 now = time.time()
                 self.fight.listeners = set().union(*self.clients.values())
+                self.fight.friendly_fire = friendly_fire(self.cfg)
+                self._report_clients()
                 if tick := self.fight.tick(now):
                     self._broadcast({"type": "tick", **tick})
                 if self.fight.ended(now, idle_end(self.cfg)):
@@ -117,6 +127,16 @@ class Server:
 
     async def load(self, name):
         self.out({"type": "session", "ticks": load_history(self.fight.history_dir, name)})
+
+    def connections(self):
+        """[address, characters] of every connected client, sorted by character."""
+        return sorted(([w.get_extra_info("peername")[0].removeprefix("::ffff:"), sorted(chars)] for w, chars in self.clients.items()),
+                      key=lambda c: (c[1] or ["~"], c[0]))
+
+    def _report_clients(self):
+        if (now := self.connections()) != self._shown:
+            self._shown = now
+            self.out({"type": "clients", "list": now})
 
     def _broadcast(self, msg):
         self.out(msg)
@@ -237,6 +257,7 @@ class Client:
                 continue
             now = time.time()
             self.fight.listeners = {char}
+            self.fight.friendly_fire = friendly_fire(self.cfg)
             self.fight.add(events)
             if tick := self.fight.tick(now):
                 self.out({"type": "tick", **tick})
