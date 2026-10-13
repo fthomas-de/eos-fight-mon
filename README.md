@@ -94,16 +94,10 @@ python -m PyInstaller --onefile --windowed --name eos-fight-mon --add-data "ship
 Linux build (headless server only, no Tk). Built on Linux or WSL with a portable Python from `uv`, so the binary runs on any distribution with glibc 2.17 or newer; a distribution's own Python would tie it to that distribution's glibc:
 
 ```bash
-pip install uv pyinstaller
+bash tools/build_linux.sh
 ```
 
-```bash
-uv python install 3.13 && uv venv --python 3.13 venv313 && uv pip install --python venv313/bin/python pyinstaller
-```
-
-```bash
-venv313/bin/python -m PyInstaller --onefile --name eos-fight-mon main.py
-```
+(sets up the portable Python in `~/efm-build` on first run, builds `dist/eos-fight-mon-linux` and smoke-tests it)
 
 On the server: copy the binary, `chmod +x eos-fight-mon`, start `./eos-fight-mon --headless`; `./eos-fight-mon --reset` ends the running fight.
 
