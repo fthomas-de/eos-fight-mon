@@ -5,7 +5,7 @@ Live view of the current EVE Online fight. Clients read their gamelogs, the serv
 - **Left**: the ships of all connected clients. **Right**: everyone else. Drone damage counts for the drone's owner; drones whose owner the log does not name are grouped on the right.
 - Arrows for damage, remote reps (shield/armor/hull/cap), neut/nos and scram/point/jam (dashed), as per-second rates over the last 10 s.
 - Cockpit on top: fight clock and the team's incoming/outgoing sums, per second and for the whole fight.
-- The server works in 2 s ticks and alone decides what a fight is: it starts with the first event and ends after 60 s without one (`idle_end`, adjustable in *Settings*) (or when *Reset* is pressed on the server; clients have no reset). Clients fetch every stored fight of the last 7 days automatically; *Replays* (newest first) plays them with start/stop and a slider.
+- The server works in 2 s ticks and alone decides what a fight is: it starts with the first event and ends after 60 s without one (`idle_end`, adjustable in *Settings*) (or on *Reset* in the server window / `--reset` on the server machine; clients cannot reset). Clients fetch every stored fight of the last 7 days automatically; *Replays* (newest first) plays them with start/stop and a slider.
 - Without a server connection a client shows only its own ship on the left and its enemies on the right; ships that only rep it are hidden (their reps still count in the cockpit). Nothing is stored then.
 - Friendly fire is not shown: hostile effects between clients and ships that rep with them are dropped.
 - Layout is made for teams of about 10.
@@ -20,6 +20,7 @@ Put `eos-fight-mon.exe` in a folder and double-click it. `config.ini` is created
 | `eos-fight-mon.exe` | client: reads logs, sends them to the server, shows the merged fight |
 | `eos-fight-mon.exe --server` | server with window (e.g. on one player's Windows PC) |
 | `eos-fight-mon --headless` | server without window (e.g. Linux server) |
+| `eos-fight-mon --reset` | on the server machine: end the running fight (the headless server's reset button; only accepted from the same machine) |
 
 Every client instance belongs to exactly one character (dropdown top left, filled from the gamelogs of the last day). For several accounts start several instances, e.g. via shortcuts with `eos-fight-mon.exe --char "Name"`.
 

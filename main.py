@@ -48,12 +48,16 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--server", action="store_true", help="run as server")
     ap.add_argument("--headless", action="store_true", help="server without window (e.g. Linux)")
+    ap.add_argument("--reset", action="store_true", help="end the running fight of the server on this machine")
     ap.add_argument("--char", help="character of this instance (default: most recently active)")
     ap.add_argument("--config", default=str(BASE / "config.ini"), help="path to config.ini")
     args = ap.parse_args()
     cfg_path = Path(args.config).resolve()
     os.chdir(BASE)  # relative paths in the config (history) live next to the program
     cfg = load_config(cfg_path)
+    if args.reset:
+        print(asyncio.run(net.send_reset(cfg)), flush=True)
+        return
     mode = "server" if args.server or args.headless or cfg["general"]["mode"] == "server" else "client"
     lower_priority()
 

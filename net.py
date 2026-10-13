@@ -27,6 +27,31 @@ def idle_end(cfg):
         return IDLE_END
 
 
+def _is_local(writer):
+    ip = ipaddress.ip_address(writer.get_extra_info("peername")[0])
+    return (getattr(ip, "ipv4_mapped", None) or ip).is_loopback
+
+
+async def send_reset(cfg):
+    """End the running fight of the server on this machine (for the headless server). Returns a message."""
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection("127.0.0.1", cfg.getint("general", "port"), limit=CLIENT_LIMIT), 5)
+    except (OSError, TimeoutError) as e:
+        return f"no server running on this machine ({e or 'timeout'})"
+    writer.write(_line({"type": "hello", "token": cfg["general"]["token"]}) + _line({"type": "reset"}))
+    try:
+        while line := await asyncio.wait_for(reader.readline(), 5):
+            kind = json.loads(line).get("type")
+            if kind in ("reset", "denied"):
+                return "reset done (a running fight is stored)" if kind == "reset" else "token rejected"
+        return "server closed the connection"
+    except (OSError, ValueError, TimeoutError):
+        return "no answer from the server"
+    finally:
+        writer.close()
+
+
 def local_ip():
     """The address other machines in the LAN reach this one by. No packet is sent."""
     try:
@@ -102,7 +127,9 @@ class Server:
                 if kind == "events":
                     self.clients[writer] = {n for n in msg["listeners"][:50] if isinstance(n, str)}
                     self.fight.add(e for e in map(to_event, msg["events"]) if e)
-                elif kind == "history":  # no "reset" here: only the server ends a fight early
+                elif kind == "reset" and _is_local(writer):  # `eos-fight-mon --reset` on the server machine
+                    await self.reset()
+                elif kind == "history":  # clients from outside cannot reset, even with the token
                     writer.write(_line({"type": "history", "sessions": list_history(self.fight.history_dir)}))
                 elif kind == "load":
                     name = str(msg.get("name"))
