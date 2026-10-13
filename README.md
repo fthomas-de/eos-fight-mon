@@ -8,6 +8,7 @@ Live view of the current EVE Online fight. Clients read their gamelogs, the serv
 - The server works in 2 s ticks and alone decides what a fight is: it starts with the first event and ends after 60 s without one (`idle_end`, adjustable in *Settings*) (or on *Reset* in the server window / `--reset` on the server machine; clients cannot reset). Clients fetch every stored fight of the last 7 days automatically; *Replays* (newest first) plays them with start/stop and a slider.
 - Without a server connection a client shows only its own ship on the left and its enemies on the right; ships that only rep it are hidden (their reps still count in the cockpit). Nothing is stored then.
 - Friendly fire is not shown: hostile effects between clients and ships that rep with them are dropped.
+- Ship icons (32 px) for every ship type, packed into the exe.
 - Layout is made for teams of about 10.
 - Runs at below-normal priority and only reads the gamelogs (no access to the game), about 5 ms of work every 2 s.
 
@@ -78,10 +79,16 @@ python main.py
 python -m unittest discover -s tests
 ```
 
+Ship icons: `ship_icons.json` holds every published ship of the EVE SDE with its 32 px icon from CCP's image server. Rebuild it when new ships come out (downloads the SDE, about 100 MB):
+
+```bash
+python tools/build_icons.py
+```
+
 Windows build:
 
 ```bash
-python -m PyInstaller --onefile --windowed --name eos-fight-mon main.py
+python -m PyInstaller --onefile --windowed --name eos-fight-mon --add-data "ship_icons.json;." main.py
 ```
 
 Linux build (headless server only, no Tk). Built on Linux or WSL with a portable Python from `uv`, so the binary runs on any distribution with glibc 2.17 or newer; a distribution's own Python would tie it to that distribution's glibc:
@@ -99,3 +106,7 @@ venv313/bin/python -m PyInstaller --onefile --name eos-fight-mon main.py
 ```
 
 On the server: copy the binary, `chmod +x eos-fight-mon`, start `./eos-fight-mon --headless`; `./eos-fight-mon --reset` ends the running fight.
+
+## Legal
+
+EVE Online and all related ship images are the property of CCP hf. This tool is not affiliated with or endorsed by CCP.

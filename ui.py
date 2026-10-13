@@ -2,6 +2,7 @@
 import asyncio
 import configparser
 import ctypes
+import json
 import math
 import queue
 import re
@@ -9,6 +10,7 @@ import sys
 import tkinter as tk
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import logparse
@@ -24,12 +26,29 @@ OFFSET = {"dmg": -6, "shield": 0, "armor": 0, "hull": 0, "cap": 3, "neut": 6, "n
 LEGEND = [("Damage", "dmg"), ("Reps", "shield"), ("Cap", "cap"), ("Neut/Nos", "neut"), ("Scram/Point/Jam", "scram")]
 GROUPS = [("Damage", "dmg", {"dmg"}), ("Reps", "shield", REPS - {"cap"}), ("Cap", "cap", {"cap"}),
           ("Neut/Nos", "neut", {"neut", "nos"})]
-BOX_W, COCKPIT_H = 260, 70
+BOX_W, COCKPIT_H = 290, 70
 FONT = "Segoe UI"
 
 
 def fmt(v):
     return f"{v / 1e6:.1f}M" if v >= 1e6 else f"{v / 1000:.1f}k" if v >= 1000 else f"{v:.0f}"
+
+
+_ICON_FILE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "ship_icons.json"  # packed into the exe
+_icons, _images = None, {}
+
+
+def ship_icon(ship):
+    """32 px image of a ship type; None for NPCs, wrecks, or a build without ship_icons.json."""
+    global _icons
+    if _icons is None:
+        try:
+            _icons = json.loads(_ICON_FILE.read_text(encoding="utf-8"))["icons"]
+        except (OSError, ValueError, KeyError):
+            _icons = {}
+    if ship not in _images:  # Tk needs the image objects kept alive
+        _images[ship] = tk.PhotoImage(data=_icons[ship]) if ship in _icons else None
+    return _images[ship]
 
 
 def draw(cv, ticks, th):
@@ -82,9 +101,13 @@ def draw(cv, ticks, th):
     for n, (_, _, col, x, y) in pos.items():
         cv.create_rectangle(x, y, x + BOX_W, y + row - 6, fill=th["panel"],
                             outline=th["accent"] if col == 0 else th["dim"])
-        cv.create_text(x + 8, y + 3, anchor="nw", text=n, fill=th["fg"], font=(FONT, 10, "bold"))
+        tx = x + 8
+        if icon := ship_icon(ships.get(n, n)):  # NPCs and bare ship names are their own type
+            cv.create_image(x + 3, y + (row - 6) / 2, anchor="w", image=icon)
+            tx += 34
+        cv.create_text(tx, y + 3, anchor="nw", text=n, fill=th["fg"], font=(FONT, 10, "bold"))
         info = f"{ships.get(n, '')}   out {fmt(out_dmg[n])}  in {fmt(in_dmg[n])}  rep {fmt(in_rep[n])}"
-        cv.create_text(x + 8, y + 19, anchor="nw", text=info, fill=th["dim"], font=(FONT, 9))
+        cv.create_text(tx, y + 19, anchor="nw", text=info, fill=th["dim"], font=(FONT, 9))
 
     x = 20
     for label, kind in LEGEND:
