@@ -1,11 +1,14 @@
-"""Tk window: client ships left, everyone else right, effects as arrows in between."""
+"""Tk window: cockpit on top, client ships left, everyone else right, effects as arrows in between."""
 import asyncio
 import math
 import queue
+import re
 import tkinter as tk
-from collections import defaultdict, deque
+from collections import defaultdict
+from datetime import datetime, timezone
 from tkinter import filedialog, messagebox, ttk
 
+import logparse
 from fight import DRONES_L, EWAR, REPS, TICK, WINDOW
 
 THEMES = {
@@ -16,21 +19,26 @@ COLORS = {"dmg": "#e5484d", "shield": "#30a46c", "armor": "#30a46c", "hull": "#3
           "neut": "#9d5bd2", "nos": "#9d5bd2", "scram": "#f76b15", "point": "#f76b15", "jam": "#f76b15"}
 OFFSET = {"dmg": -6, "shield": 0, "armor": 0, "hull": 0, "cap": 3, "neut": 6, "nos": 6, "scram": 9, "point": 9, "jam": 9}
 LEGEND = [("Schaden", "dmg"), ("Reps", "shield"), ("Cap", "cap"), ("Neut/Nos", "neut"), ("Scram/Punkt/Jam", "scram")]
-BOX_W, ROW = 260, 46
+GROUPS = [("Schaden", "dmg", {"dmg"}), ("Reps", "shield", REPS - {"cap"}), ("Cap", "cap", {"cap"}),
+          ("Neut/Nos", "neut", {"neut", "nos"})]
+BOX_W, COCKPIT_H = 260, 70
 FONT = "Segoe UI"
 
 
-def fmt(rate):
-    return f"{rate / 1000:.1f}k" if rate >= 1000 else f"{rate:.0f}"
+def fmt(v):
+    return f"{v / 1e6:.1f}M" if v >= 1e6 else f"{v / 1000:.1f}k" if v >= 1000 else f"{v:.0f}"
 
 
-def draw(cv, window, th):
-    """Draw the last ticks as per-second rates."""
+def draw(cv, ticks, th):
+    """Draw a fight up to its last tick: cockpit with team sums, ships with per-second rates of the last 10 s."""
     cv.delete("all")
     w, h = cv.winfo_width(), cv.winfo_height()
-    if not window:
+    if not ticks:
         cv.create_text(w / 2, h / 2, text="Warte auf Kampf …", fill=th["dim"], font=(FONT, 16))
         return
+    last = ticks[-1]
+    ships, left_names = last["ships"], set(last["left"]) | {DRONES_L}
+    window = ticks[-WINDOW:]
     secs = TICK * len(window)
     rates, ewar = defaultdict(float), set()
     for t in window:
@@ -39,7 +47,8 @@ def draw(cv, window, th):
                 ewar.add((k, s, d))
             else:
                 rates[(k, s, d)] += a / secs
-    ships, left_names = window[-1]["ships"], set(window[-1]["left"]) | {DRONES_L}
+    _cockpit(cv, w, th, ticks, rates, left_names)
+
     out_dmg, in_dmg, in_rep = defaultdict(float), defaultdict(float), defaultdict(float)
     for (k, s, d), r in rates.items():
         if k == "dmg":
@@ -47,36 +56,65 @@ def draw(cv, window, th):
             in_dmg[d] += r
         elif k in REPS:
             in_rep[d] += r
-
     names = {n for _, s, d in [*rates, *ewar] for n in (s, d)}
     left = sorted(n for n in names if n in left_names)
     right = sorted(names - set(left), key=lambda n: -(out_dmg[n] + in_dmg[n] + in_rep[n]))
-    rows = max(2, (h - 60) // ROW)
+
+    top, usable = COCKPIT_H + 10, h - COCKPIT_H - 40
+    row = max(38, min(56, usable / max(1, len(left), len(right))))  # a 10 man team always fits
+    rows = max(2, int(usable // row))
     if len(right) > rows:
         right = right[:rows - 1] + [f"+{len(right) - rows + 1} weitere"]
-
     pos = {}
     for col, column in enumerate((left[:rows], right)):
         x = 20 if col == 0 else w - 20 - BOX_W
         for i, n in enumerate(column):
-            pos[n] = (x + BOX_W if col == 0 else x, 20 + i * ROW + ROW / 2 - 3, col, x, 20 + i * ROW)
+            y = top + i * row
+            pos[n] = (x + BOX_W if col == 0 else x, y + (row - 6) / 2, col, x, y)
 
     for (k, s, d), r in rates.items():
         _arrow(cv, pos, k, s, d, 1 + min(6, math.log10(1 + r)))
     for k, s, d in ewar:
         _arrow(cv, pos, k, s, d, 2, dash=(4, 3))
-
     for n, (_, _, col, x, y) in pos.items():
-        cv.create_rectangle(x, y, x + BOX_W, y + ROW - 6, fill=th["panel"],
+        cv.create_rectangle(x, y, x + BOX_W, y + row - 6, fill=th["panel"],
                             outline=th["accent"] if col == 0 else th["dim"])
-        cv.create_text(x + 8, y + 4, anchor="nw", text=n, fill=th["fg"], font=(FONT, 10, "bold"))
+        cv.create_text(x + 8, y + 3, anchor="nw", text=n, fill=th["fg"], font=(FONT, 10, "bold"))
         info = f"{ships.get(n, '')}   aus {fmt(out_dmg[n])}  ein {fmt(in_dmg[n])}  rep {fmt(in_rep[n])}"
-        cv.create_text(x + 8, y + 22, anchor="nw", text=info, fill=th["dim"], font=(FONT, 9))
+        cv.create_text(x + 8, y + 19, anchor="nw", text=info, fill=th["dim"], font=(FONT, 9))
 
     x = 20
     for label, kind in LEGEND:
         cv.create_line(x, h - 14, x + 20, h - 14, fill=COLORS[kind], width=3)
         x = cv.bbox(cv.create_text(x + 26, h - 14, anchor="w", text=label, fill=th["dim"], font=(FONT, 9)))[2] + 18
+
+
+def _cockpit(cv, w, th, ticks, rates, left_names):
+    """Fight clock plus the team's outgoing/incoming sums: per second now and over the whole fight."""
+    total = defaultdict(float)
+    for t in ticks:
+        for k, s, d, a in t["flows"]:
+            total[(k, s in left_names, d in left_names)] += a
+    now = defaultdict(float)
+    for (k, s, d), r in rates.items():
+        now[(k, s in left_names, d in left_names)] += r
+
+    def side(values, kinds, outgoing):
+        return sum(v for (k, s_left, d_left), v in values.items() if k in kinds and (s_left if outgoing else d_left))
+
+    secs = ticks[-1]["t"] - ticks[-1].get("start", ticks[0]["t"]) + TICK
+    col_w = 175
+    x = max(20, (w - 120 - col_w * len(GROUPS)) / 2)
+    cv.create_rectangle(x - 10, 6, x + 120 + col_w * len(GROUPS), COCKPIT_H - 4, fill=th["panel"], outline=th["dim"])
+    cv.create_text(x + 50, COCKPIT_H / 2, text=_mmss(secs), fill=th["accent"],
+                   font=(FONT, 20, "bold"))
+    x += 120
+    for label, color_kind, kinds in GROUPS:
+        cv.create_text(x, 12, anchor="nw", text=label, fill=COLORS[color_kind], font=(FONT, 10, "bold"))
+        for i, (word, outgoing) in enumerate((("aus", True), ("ein", False))):
+            text = f"{word} {fmt(side(now, kinds, outgoing))}/s   Σ {fmt(side(total, kinds, outgoing))}"
+            cv.create_text(x, 32 + i * 16, anchor="nw", text=text, fill=th["fg"], font=(FONT, 9))
+        x += col_w
 
 
 def _arrow(cv, pos, kind, s, d, width, dash=None):
@@ -92,35 +130,56 @@ def _arrow(cv, pos, kind, s, d, width, dash=None):
         cv.create_line(x1, y1, x2, y2, **opts)
 
 
+def fight_label(name):
+    """'20261013_191334.jsonl.gz' (UTC) -> '13.10.2026 21:13:34' (local time)."""
+    start = datetime.strptime(name[:15], "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
+    return start.astimezone().strftime("%d.%m.%Y  %H:%M:%S")
+
+
 class App:
-    def __init__(self, mode, backend, loop, q, cfg, cfg_path):
+    def __init__(self, mode, backend, loop, q, cfg, cfg_path, connect_code=None):
         self.mode, self.backend, self.loop, self.q = mode, backend, loop, q
         self.cfg, self.cfg_path = cfg, cfg_path
         self.th = th = THEMES[mode]
-        self.live = deque(maxlen=WINDOW)
+        self.live = []  # ticks of the running fight
         self.replay, self.pos, self.playing, self._timer = None, 0, False, None
 
         root = self.root = tk.Tk()
-        root.title(f"eos-fight-mon – {'Server' if mode == 'server' else 'Client'}")
         root.geometry("1150x720")
+        root.minsize(900, 560)
         root.configure(bg=th["bg"])
 
         self.bar = tk.Frame(root, bg=th["panel"])
         self.bar.pack(fill="x")
+        if mode == "client":
+            self.char = tk.StringVar(value=backend.char or "")
+            box = ttk.Combobox(self.bar, textvariable=self.char, state="readonly", width=24,
+                               postcommand=lambda: box.configure(values=logparse.characters(cfg["client"]["log_dir"])))
+            box.bind("<<ComboboxSelected>>", lambda e: self._set_char())
+            box.pack(side="left", padx=(10, 4), pady=4)
+        else:
+            tk.Label(self.bar, text="Verbindungscode:", bg=th["panel"], fg=th["dim"]).pack(side="left", padx=(10, 4))
+            code = tk.Entry(self.bar, width=len(connect_code) + 2, bg=th["bg"], fg=th["fg"], relief="flat",
+                            readonlybackground=th["bg"])
+            code.insert(0, connect_code)
+            code.configure(state="readonly")
+            code.pack(side="left", pady=4)
+            self._button(self.bar, "Kopieren", lambda: self._copy(connect_code)).pack(side="left", padx=4)
         self.status = tk.StringVar()
         tk.Label(self.bar, textvariable=self.status, bg=th["panel"], fg=th["fg"], font=(FONT, 10)).pack(
             side="left", padx=10)
         self._button(self.bar, "Einstellungen", self._settings).pack(side="right", padx=4, pady=4)
-        self._button(self.bar, "Verlauf", lambda: self.call(backend.history)).pack(side="right", padx=4)
+        self._button(self.bar, "Replays", lambda: self.call(backend.history)).pack(side="right", padx=4)
         self._button(self.bar, "Reset", lambda: self.call(backend.reset)).pack(side="right", padx=4)
         if mode == "client":
             self.enabled = cfg.getboolean("client", "auto_connect")
             self.conn = self._button(self.bar, "", self._toggle)
             self.conn.pack(side="right", padx=4)
             self._conn_text()
+        self._title()
 
         self.replay_bar = tk.Frame(root, bg=th["panel"])
-        self.play_btn = self._button(self.replay_bar, "Pause", self._play_pause)
+        self.play_btn = self._button(self.replay_bar, "Stop", self._play_pause)
         self.play_btn.pack(side="left", padx=4, pady=4)
         self.scale = tk.Scale(self.replay_bar, orient="horizontal", showvalue=False, command=self._seek,
                               bg=th["panel"], fg=th["fg"], troughcolor=th["bg"], highlightthickness=0)
@@ -139,14 +198,20 @@ class App:
         return tk.Button(parent, text=text, command=cmd, bg=th["bg"], fg=th["fg"], relief="flat",
                          activebackground=th["accent"], activeforeground=th["bg"], padx=8)
 
+    def _title(self):
+        who = f"Client – {self.char.get() or 'kein Charakter'}" if self.mode == "client" else "Server"
+        self.root.title(f"eos-fight-mon – {who}")
+
+    def _copy(self, text):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.status.set("Verbindungscode kopiert")
+
     def call(self, fn, *args):
         asyncio.run_coroutine_threadsafe(fn(*args), self.loop)
 
     def redraw(self):
-        if self.replay is not None:
-            draw(self.canvas, self.replay[max(0, self.pos - WINDOW + 1):self.pos + 1], self.th)
-        else:
-            draw(self.canvas, list(self.live), self.th)
+        draw(self.canvas, self.replay[:self.pos + 1] if self.replay is not None else self.live, self.th)
 
     def _drain(self):
         """Handle what the network thread queued."""
@@ -157,7 +222,7 @@ class App:
                 if kind == "tick":
                     self.live.append(msg)
                 elif kind == "reset":
-                    self.live.clear()
+                    self.live = []
                 elif kind == "status":
                     self.status.set(msg["text"])
                 elif kind == "history":
@@ -170,6 +235,10 @@ class App:
             pass
         self.root.after(100, self._drain)
 
+    def _set_char(self):
+        self.call(self.backend.set_char, self.char.get())
+        self._title()
+
     def _toggle(self):
         self.enabled = not self.enabled
         self.call(self.backend.set_enabled, self.enabled)
@@ -178,15 +247,17 @@ class App:
     def _conn_text(self):
         self.conn.configure(text=f"Verbindung: {'an' if self.enabled else 'aus'}")
 
-    # --- history / replay ---
+    # --- replays ---
 
     def _history(self, sessions):
-        top = self._dialog("Verlauf")
+        top = self._dialog("Replays")
         if not sessions:
-            tk.Label(top, text="Noch keine Kämpfe gespeichert.", bg=self.th["bg"], fg=self.th["fg"]).pack(padx=20, pady=20)
+            tk.Label(top, text="Noch keine Kämpfe gespeichert.", bg=self.th["bg"], fg=self.th["fg"]).pack(
+                padx=20, pady=20)
             return
-        lb = tk.Listbox(top, width=32, height=15, bg=self.th["panel"], fg=self.th["fg"], relief="flat")
-        lb.insert("end", *sessions)
+        lb = tk.Listbox(top, width=28, height=15, bg=self.th["panel"], fg=self.th["fg"], relief="flat",
+                        font=(FONT, 10))
+        lb.insert("end", *map(fight_label, sessions))
         lb.pack(padx=10, pady=10)
 
         def play(_=None):
@@ -202,7 +273,7 @@ class App:
         self.replay, self.pos, self.playing = ticks, 0, True
         self.scale.configure(to=len(ticks) - 1)
         self.scale.set(0)
-        self.play_btn.configure(text="Pause")
+        self.play_btn.configure(text="Stop")
         self.replay_bar.pack(fill="x", after=self.bar)
         self._schedule()
         self._seek(0)
@@ -224,12 +295,16 @@ class App:
         if self.replay is None:
             return
         self.pos = int(float(value))
-        self.replay_label.configure(text=f"{self.pos * TICK} s / {(len(self.replay) - 1) * TICK} s")
+        t0 = self.replay[0]["t"]
+        self.replay_label.configure(
+            text=f"{_mmss(self.replay[self.pos]['t'] - t0 + TICK)} / {_mmss(self.replay[-1]['t'] - t0 + TICK)}")
         self.redraw()
 
     def _play_pause(self):
+        if not self.playing and self.pos >= len(self.replay) - 1:
+            self.scale.set(0)  # Start at the end plays from the beginning
         self.playing = not self.playing
-        self.play_btn.configure(text="Pause" if self.playing else "Abspielen")
+        self.play_btn.configure(text="Stop" if self.playing else "Start")
 
     def _stop_replay(self):
         if self._timer:
@@ -249,22 +324,27 @@ class App:
 
     def _settings(self):
         top = self._dialog("Einstellungen")
-        fields = [("Modus", "general", "mode"), ("Server-Adresse", "client", "host"), ("Port", "general", "port"),
-                  ("Token", "general", "token"), ("Log-Ordner", "client", "log_dir")]
+        fields = [("Modus", "general", "mode"), ("Server-Adresse oder Verbindungscode", "client", "host"),
+                  ("Port", "general", "port"), ("Token", "general", "token"), ("Log-Ordner", "client", "log_dir")]
         values = {}
         for row, (label, sec, key) in enumerate(fields):
-            tk.Label(top, text=label, bg=self.th["bg"], fg=self.th["fg"]).grid(row=row, column=0, sticky="w", padx=10, pady=4)
+            tk.Label(top, text=label, bg=self.th["bg"], fg=self.th["fg"]).grid(row=row, column=0, sticky="w",
+                                                                              padx=10, pady=4)
             var = values[(sec, key)] = tk.StringVar(value=self.cfg[sec][key])
             if key == "mode":
                 ttk.Combobox(top, textvariable=var, values=["client", "server"], state="readonly", width=12).grid(
                     row=row, column=1, sticky="w", padx=10)
             else:
                 tk.Entry(top, textvariable=var, width=50).grid(row=row, column=1, padx=10)
-        browse = lambda: values[("client", "log_dir")].set(  # noqa: E731
-            filedialog.askdirectory(parent=top) or values[("client", "log_dir")].get())
-        self._button(top, "…", browse).grid(row=len(fields) - 1, column=2, padx=(0, 10))
+        log_dir = values[("client", "log_dir")]
+        self._button(top, "…", lambda: log_dir.set(filedialog.askdirectory(parent=top) or log_dir.get())).grid(
+            row=len(fields) - 1, column=2, padx=(0, 10))
 
         def save():
+            # a pasted connection code "host:port/token" fills all three fields
+            if m := re.fullmatch(r"(.+):(\d+)/(\S+)", values[("client", "host")].get().strip()):
+                for key, value in zip((("client", "host"), ("general", "port"), ("general", "token")), m.groups()):
+                    values[key].set(value)
             port = values[("general", "port")].get().strip()
             if not port.isdigit() or not 0 < int(port) < 65536:
                 messagebox.showerror("Einstellungen", "Port muss eine Zahl zwischen 1 und 65535 sein.", parent=top)
@@ -273,7 +353,11 @@ class App:
                 self.cfg[sec][key] = var.get().strip()
             with open(self.cfg_path, "w", encoding="utf-8") as fh:
                 self.cfg.write(fh)
-            messagebox.showinfo("Einstellungen", "Gespeichert. Adresse, Token und Log-Ordner gelten sofort bzw. "
-                                "ab der nächsten Verbindung, Modus und Server-Port nach einem Neustart.", parent=top)
+            messagebox.showinfo("Einstellungen", "Gespeichert. Im Client gilt alles ab der nächsten Verbindung, "
+                                "Modus und Server-Port nach einem Neustart.", parent=top)
             top.destroy()
         self._button(top, "Speichern", save).grid(row=len(fields), column=1, sticky="e", padx=10, pady=10)
+
+
+def _mmss(secs):
+    return f"{int(secs) // 60:02d}:{int(secs) % 60:02d}"

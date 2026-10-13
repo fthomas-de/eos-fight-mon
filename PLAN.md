@@ -20,6 +20,10 @@ Live-Visualisierung des aktuellen EVE-Kampfes, ohne die Spielperformance zu beei
 - **Client** sendet alle 2 s die geparsten Events; ohne Verbindung rechnet er selbst und zeigt nur die eigenen Charaktere.
 - **Server** fasst pro Takt zusammen und schickt allen Clients dieselbe Lage. Ereignisse zwischen zwei Clients zählen nur aus dem Log der Quelle.
 - **Seiten**: links die Charaktere der Clients (`Listener:` im Log-Kopf), rechts alle anderen. Drohnen erkannt über den Typnamen.
+- **Eine Instanz = ein Charakter** (Dropdown / `--char`), damit mehrere Accounts parallel laufen.
+- **Replays**: Server speichert, Clients gleichen nach jedem Kampf und beim Verbinden automatisch ab. Späte Clients bekommen den laufenden Kampf von Anfang an.
+- **Cockpit**: Uhr plus Team-Summen ein/aus, pro Sekunde und gesamt.
+- **Verbindungscode** `IP:Port/Token` zum Kopieren statt Browser-Link (der bräuchte einen Registry-Eintrag).
 - **Kampfende**: 60 s ohne Event oder *Reset* → Speichern als `history/<start>.jsonl.gz`, Anzeige leeren.
 - **Richtung** bei Neuts aus der Farbe: rot = eingehend, cyan = ausgehend (an echten Logs geprüft).
 - **Takte nach Eingang**, nicht nach Log-Zeitstempel (Uhren der Clients müssen nicht stimmen).

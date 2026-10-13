@@ -47,6 +47,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--server", action="store_true", help="als Server starten")
     ap.add_argument("--headless", action="store_true", help="Server ohne Fenster (z. B. Linux)")
+    ap.add_argument("--char", help="Charakter dieser Instanz (sonst der zuletzt aktive)")
     ap.add_argument("--config", default=str(BASE / "config.ini"), help="Pfad zur config.ini")
     args = ap.parse_args()
     cfg_path = Path(args.config).resolve()
@@ -55,8 +56,10 @@ def main():
     mode = "server" if args.server or args.headless or cfg["general"]["mode"] == "server" else "client"
     lower_priority()
 
+    code = f"{net.local_ip()}:{cfg['general']['port']}/{cfg['general']['token']}"
+
     if args.headless:
-        print(f"eos-fight-mon Server auf Port {cfg['general']['port']}, Token in {cfg_path}", flush=True)
+        print(f"eos-fight-mon Server läuft. Verbindungscode für die Clients: {code}", flush=True)
         asyncio.run(net.Server(cfg, lambda msg: None).run())
         return
 
@@ -64,7 +67,8 @@ def main():
     if mode == "server":
         backend = net.Server(cfg, q.put)
     else:
-        backend = net.Client(cfg, logparse.LogWatcher(), q.put)
+        chars = logparse.characters(cfg["client"]["log_dir"])
+        backend = net.Client(cfg, logparse.LogWatcher(), q.put, args.char or (chars[0] if chars else None))
     loop = asyncio.new_event_loop()
 
     def run():
@@ -75,7 +79,7 @@ def main():
     threading.Thread(target=run, daemon=True).start()
 
     from ui import App  # only here, so a headless Linux server needs no Tk
-    App(mode, backend, loop, q, cfg, cfg_path).root.mainloop()
+    App(mode, backend, loop, q, cfg, cfg_path, code).root.mainloop()
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ import time
 import unittest
 from pathlib import Path
 
-from logparse import Event, LogWatcher, parse
+from logparse import Event, LogWatcher, characters, parse
 
 ME = "Me Myself"
 P = "[ 2026.10.12 18:15:00 ] (combat) "
@@ -81,24 +81,28 @@ class WatcherTest(unittest.TestCase):
             old = Path(d, "old.txt")
             old.write_text(HEADER.format(ME) + DMG_IN + "\r\n", newline="")
             w = LogWatcher()
-            self.assertEqual(w.poll(d), [])  # what was there before start is skipped
-            self.assertEqual(w.listeners, {ME})
+            self.assertEqual(w.poll(d, ME), [])  # what was there before start is skipped
 
             with open(old, "a", newline="") as fh:
                 fh.write(DMG_OUT + "\r\n" + DMG_IN[:40])  # second line still being written
-            self.assertEqual([e.kind for e in w.poll(d)], ["dmg"])
+            self.assertEqual([e.kind for e in w.poll(d, ME)], ["dmg"])
             with open(old, "a", newline="") as fh:
                 fh.write(DMG_IN[40:] + "\r\n")
-            self.assertEqual([e.src for e in w.poll(d)], ["Foe One"])
+            self.assertEqual([e.src for e in w.poll(d, ME)], ["Foe One"])
 
             Path(d, "new.txt").write_text(HEADER.format("Alt") + JAM + "\r\n", newline="")
-            self.assertEqual([e.logger for e in w.poll(d)], ["Alt"])  # new file: read from the top
-            self.assertEqual(w.listeners, {ME, "Alt"})
+            self.assertEqual(w.poll(d, ME), [])  # another character's log is not ours
+            os.utime(old, (time.time() - 60, time.time() - 60))
+            self.assertEqual(characters(d), ["Alt", ME])
 
-            stale = time.time() - 3600
+            self.assertEqual(w.poll(d, "Alt"), [])  # switching character skips its past as well
+            with open(Path(d, "new.txt"), "a", newline="") as fh:
+                fh.write(JAM + "\r\n")
+            self.assertEqual([e.logger for e in w.poll(d, "Alt")], ["Alt"])
+
+            stale = time.time() - 3 * 86400
             os.utime(old, (stale, stale))
-            w.poll(d)
-            self.assertEqual(w.listeners, {"Alt"})
+            self.assertEqual(characters(d), ["Alt"])
 
 
 if __name__ == "__main__":

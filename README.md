@@ -4,7 +4,9 @@ Live-Anzeige des laufenden EVE-Online-Kampfes. Clients lesen ihre Gamelogs, der 
 
 - **Links** die Schiffe aller verbundenen Clients, **rechts** alle anderen, Drohnen je Seite gesammelt.
 - Pfeile für Schaden, Remote-Reps (Schild/Panzer/Hülle/Cap), Neut/Nos sowie Scram/Punkt/Jam (gestrichelt), Werte pro Sekunde über die letzten 10 s.
-- Der Server rechnet in 2-Sekunden-Takten. Nach 60 s ohne Ereignis (oder per *Reset*) wird der Kampf im Verlauf gespeichert und kann wieder abgespielt werden.
+- Cockpit oben: Dauer des Kampfes und die Summen des Teams, ein- und ausgehend, pro Sekunde und über den ganzen Kampf.
+- Der Server rechnet in 2-Sekunden-Takten. Nach 60 s ohne Ereignis (oder per *Reset*) wird der Kampf gespeichert. Die Clients holen sich jeden gespeicherten Kampf automatisch; unter *Replays* (sortiert nach Startzeit) lässt er sich mit Start/Stop und Schieberegler abspielen.
+- Eigene Drohnen landen links, fremde rechts. Das Layout ist auf Teams um 10 Schiffe ausgelegt.
 - Läuft mit niedriger Prozesspriorität, liest nur die Logdateien (kein Zugriff aufs Spiel), etwa 5 ms Arbeit alle 2 s.
 
 ## Start
@@ -17,7 +19,13 @@ Nur `eos-fight-mon.exe` in einen Ordner legen und doppelklicken. Beim ersten Sta
 | `eos-fight-mon.exe --server` | Server mit Fenster (bei einem Spieler unter Windows) |
 | `eos-fight-mon --headless` | Server ohne Fenster (z. B. Linux-Server) |
 
-Ohne Serververbindung zeigt der Client nur die eigenen Charaktere. Der Knopf *Verbindung* schaltet die Verbindung bzw. den Neuversuch alle 15 s an und aus.
+Jede Client-Instanz gehört zu genau einem Charakter (Dropdown oben links, gefüllt aus den Gamelogs des letzten Tages). Für mehrere Accounts einfach mehrere Instanzen starten, z. B. per Verknüpfung mit `eos-fight-mon.exe --char "Name"`.
+
+Ohne Serververbindung zeigt der Client nur den eigenen Charakter. Der Knopf *Verbindung* schaltet die Verbindung bzw. den Neuversuch alle 15 s an und aus.
+
+**Verbinden:** Der Server zeigt oben einen Verbindungscode `IP:Port/Token` mit *Kopieren*-Knopf (bzw. gibt ihn ohne Fenster auf der Konsole aus). Im Client unter *Einstellungen* in das Feld *Server-Adresse* einfügen und speichern. Die angezeigte IP ist die im lokalen Netz; über das Internet braucht es die öffentliche IP und eine Portweiterleitung am Router.
+
+Das Tool liest nur die Gamelogs und schreibt nur neben sich selbst (`config.ini`, `history/`).
 
 ## config.ini
 

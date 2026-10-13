@@ -1,6 +1,8 @@
 """Folds the events of all clients into 2 s ticks and stores finished fights as history."""
 import gzip
 import json
+import os
+import re
 import time
 from pathlib import Path
 
@@ -12,6 +14,7 @@ IDLE_END = 60  # seconds without an event end the fight
 EWAR = {"scram", "point", "jam"}
 REPS = {"shield", "armor", "hull", "cap"}
 DRONES_L, DRONES_R = "Drohnen (L)", "Drohnen (R)"
+HISTORY_NAME = re.compile(r"\d{8}_\d{6}\.jsonl\.gz")  # fight start in UTC, so names sort by date and time
 # shortcut: drones are recognised by one word of their type name; add a word when a drone shows up as a ship
 _DRONE_WORDS = {
     "Acolyte", "Infiltrator", "Praetor", "Curator", "Hobgoblin", "Hammerhead", "Ogre", "Garde",
@@ -52,7 +55,8 @@ class Fight:
         elif not self.ticks:
             return None
         self.left |= {n for _, s, d in flows for n in (s, d) if n in self.listeners}
-        tick = {"t": int(now), "flows": [[k, s, d, a] for (k, s, d), a in flows.items()],
+        start = self.ticks[0]["t"] if self.ticks else int(now)
+        tick = {"t": int(now), "start": start, "flows": [[k, s, d, a] for (k, s, d), a in flows.items()],
                 "ships": dict(self.ships), "left": sorted(self.left)}
         self.ticks.append(tick)
         return tick
@@ -75,15 +79,25 @@ class Fight:
         while ticks and not ticks[-1]["flows"]:
             ticks.pop()
         if ticks:
-            self.history_dir.mkdir(parents=True, exist_ok=True)
-            name = time.strftime("%Y%m%d_%H%M%S", time.gmtime(ticks[0]["t"])) + ".jsonl.gz"
-            with gzip.open(self.history_dir / name, "wt", encoding="utf-8") as fh:
-                fh.writelines(json.dumps(t) + "\n" for t in ticks)
+            save_history(self.history_dir, time.strftime("%Y%m%d_%H%M%S", time.gmtime(ticks[0]["t"])) + ".jsonl.gz",
+                         ticks)
         self._reset()
 
 
+def save_history(history_dir, name, ticks):
+    """Write via a temp file, so parallel instances sharing the folder never read half a fight."""
+    history_dir = Path(history_dir)
+    history_dir.mkdir(parents=True, exist_ok=True)
+    tmp = history_dir / f".{name}.{os.getpid()}.tmp"
+    with gzip.open(tmp, "wt", encoding="utf-8") as fh:
+        fh.writelines(json.dumps(t) + "\n" for t in ticks)
+    os.replace(tmp, history_dir / name)
+
+
 def list_history(history_dir):
-    return sorted((p.name for p in Path(history_dir).glob("*.jsonl.gz")), reverse=True)
+    """Stored fights, newest start first."""
+    return sorted((p.name for p in Path(history_dir).glob("*.jsonl.gz") if HISTORY_NAME.fullmatch(p.name)),
+                  reverse=True)
 
 
 def load_history(history_dir, name):

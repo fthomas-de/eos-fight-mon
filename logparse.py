@@ -68,20 +68,54 @@ def _between(kind, incoming, rest, parts_with_weapon, amount, logger):
     return Event(kind, logger, None, name, ship, amount, weapon, logger)
 
 
+_headers = {}  # path -> listener; a gamelog never changes its header
+
+
+def listener(path):
+    if path not in _headers:
+        try:
+            with open(path, "rb") as fh:
+                m = _LISTENER.search(fh.read(1024))
+        except OSError:
+            return ""
+        if not m:
+            return ""  # header not written yet: ask again later
+        _headers[path] = m[1].decode("utf-8", "replace")
+    return _headers[path]
+
+
+def characters(log_dir, max_age=86400):
+    """Characters with a gamelog written in the last day, most recently active first."""
+    now = time.time()
+    try:
+        entries = sorted(((de.stat().st_mtime, de.path) for de in os.scandir(Path(log_dir).expanduser())
+                          if de.name.endswith(".txt")), reverse=True)
+    except OSError:
+        return []
+    names = {}
+    for mtime, path in entries:
+        if now - mtime > max_age:
+            break
+        if name := listener(path):
+            names.setdefault(name)
+    return list(names)
+
+
 class LogWatcher:
-    """Tails every recently written gamelog. Files already there on the first poll are read from their end."""
+    """Tails the gamelogs of one character. Files already there when watching starts are read from their end."""
 
     def __init__(self, active_secs=600):
         self.active_secs = active_secs
-        self.files = {}  # path -> [listener, offset, unfinished line]
-        self.listeners = set()
-        self._dir = None
+        self.files = {}  # path -> [offset, unfinished line]
+        self._key = None
 
-    def poll(self, log_dir):
-        first = log_dir != self._dir
-        if first:  # new folder: forget offsets, skip its past
-            self._dir, self.files = log_dir, {}
-        now, events, listeners = time.time(), [], set()
+    def poll(self, log_dir, char):
+        first = (log_dir, char) != self._key
+        if first:  # other folder or character: forget offsets, skip the past
+            self._key, self.files = (log_dir, char), {}
+        now, events = time.time(), []
+        if not char:
+            return events
         try:
             entries = list(os.scandir(Path(log_dir).expanduser()))
         except OSError:
@@ -93,28 +127,18 @@ class LogWatcher:
                 st = de.stat()
             except OSError:
                 continue
-            f = self.files.setdefault(de.path, [None, st.st_size if first else 0, b""])
-            if now - st.st_mtime > self.active_secs:
-                continue
-            if f[0] is not None and st.st_size <= f[1]:
-                if f[0]:
-                    listeners.add(f[0])
+            f = self.files.setdefault(de.path, [st.st_size if first else 0, b""])
+            if now - st.st_mtime > self.active_secs or st.st_size <= f[0] or listener(de.path) != char:
                 continue
             try:
                 with open(de.path, "rb") as fh:
-                    if f[0] is None:
-                        m = _LISTENER.search(fh.read(1024))
-                        f[0] = m[1].decode("utf-8", "replace") if m else ""
-                    fh.seek(f[1])
+                    fh.seek(f[0])
                     data = fh.read()
             except OSError:
                 continue
-            f[1] += len(data)
-            *lines, f[2] = (f[2] + data).split(b"\n")
-            if f[0]:
-                listeners.add(f[0])
-                for raw in lines:
-                    if e := parse(raw.decode("utf-8", "replace").rstrip("\r"), f[0]):
-                        events.append(e)
-        self.listeners = listeners
+            f[0] += len(data)
+            *lines, f[1] = (f[1] + data).split(b"\n")
+            for raw in lines:
+                if e := parse(raw.decode("utf-8", "replace").rstrip("\r"), char):
+                    events.append(e)
         return events

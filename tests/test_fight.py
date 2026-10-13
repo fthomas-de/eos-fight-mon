@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 
-from fight import DRONES_L, DRONES_R, IDLE_END, Fight, list_history, load_history, to_event
+from fight import DRONES_L, DRONES_R, IDLE_END, Fight, list_history, load_history, save_history, to_event
 from logparse import Event
 
 
@@ -37,7 +37,7 @@ class FightTest(unittest.TestCase):
         self.assertIsNone(self.f.tick(0))  # no fight yet
         self.f.add([ev("dmg", "Foe", "A", 50, "A")])
         self.f.tick(100)
-        self.assertIsNotNone(self.f.tick(102))  # empty ticks keep coming while the fight runs
+        self.assertEqual(self.f.tick(102)["start"], 100)  # empty ticks keep coming while the fight runs
         self.assertFalse(self.f.ended(100 + IDLE_END - 1))
         self.assertTrue(self.f.ended(100 + IDLE_END))
         self.f.end()
@@ -46,6 +46,9 @@ class FightTest(unittest.TestCase):
         ticks = load_history(self.tmp.name, name)
         self.assertEqual([t["flows"] for t in ticks], [[["dmg", "Foe", "A", 50]]])  # idle tail dropped
         self.assertEqual(load_history(self.tmp.name, "../" + name), [])
+        save_history(self.tmp.name, "20991231_235959.jsonl.gz", ticks)
+        open(f"{self.tmp.name}/evil.jsonl.gz", "w").close()
+        self.assertEqual(list_history(self.tmp.name), ["20991231_235959.jsonl.gz", name])  # newest first
 
     def test_to_event(self):
         good = ["dmg", "A", None, "B", "Gila", 10, None, "A"]
