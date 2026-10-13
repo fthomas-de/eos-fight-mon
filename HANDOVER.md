@@ -15,8 +15,9 @@ State on 2026-10-13. Read this, `README.md` and `PLAN.md` before continuing.
 | `logparse.py` | gamelog line → `Event`; `LogWatcher` tails one character's logs; `characters()` lists characters from log headers; spots logs in another language |
 | `fight.py` | 2 s ticks, dedupe between clients, friendly fire filter, solo view (`hidden`), drones, idle end, replay files (`history/*.jsonl.gz`) |
 | `net.py` | TCP, one JSON per line, token check, server/client, replay sync (last 7 days), `--reset` (localhost only), public address via api.ipify.org |
-| `ui.py` | tkinter canvas, cockpit, themes, replay bar, settings (restart on mode/port/host/token), window geometry per character in `[windows]` of config.ini, ship icons |
-| `main.py` | CLI (`--server`, `--headless`, `--reset`, `--char`, `--geometry`, `--config`), config defaults, restart |
+| `ui.py` | tkinter canvas, separate cockpit window, always on top, update dialog, themes, replay bar, settings (restart on mode/port/host/token), window geometry per character in `[windows]` of config.ini, ship icons |
+| `main.py` | CLI (`--server`, `--headless`, `--reset`, `--char`, `--geometry`, `--config`, `--version`), config defaults, restart |
+| `update.py` | `VERSION`, GitHub release check, download + SHA256 check + exe swap, cleanup of `*.old` |
 | `tools/build_icons.py` | SDE → `ship_icons.json` (424 ships, 32 px icons, base64) |
 | `tools/build_linux.sh` | Linux build with portable Python (glibc 2.17+) plus smoke test |
 
@@ -34,6 +35,8 @@ python -m PyInstaller --onefile --windowed --name eos-fight-mon --add-data "ship
 ```bash
 wsl.exe -d Ubuntu -- bash /mnt/c/Users/floth/Documents/eos-fight-mon/tools/build_linux.sh
 ```
+
+Before building: bump `VERSION` in `update.py`. The self-update finds the asset by its suffix `-windows-x64.exe` / `-linux-x86_64` and needs `SHA256SUMS.txt` (format `hash *name`) in the release, so keep those names.
 
 Release: copy both binaries renamed `eos-fight-mon-vX.Y.Z-windows-x64.exe` / `-linux-x86_64` into a folder, write `SHA256SUMS.txt` and `RELEASE_NOTES.md` (previous notes: `gh release view v0.4.0`), tag, push, then
 `"C:\Program Files\GitHub CLI\gh.exe" release create vX.Y.Z --repo fthomas-de/eos-fight-mon --title ... --notes-file ... <files>`
@@ -55,6 +58,8 @@ and re-download to compare checksums. `gh` is logged in as `fthomas-de` but not 
 - Never tested: a client connecting over the internet, a real 10-man fight, the v0.4.0 Windows exe started by hand (icons only checked on an invisible canvas and in the archive), clicking through the settings dialog, the Linux binary on an old distribution.
 - No systemd unit for the headless server (user did not ask).
 - Possible: show the drone-name list gaps (`fight._DRONE_WORDS`) when new drones appear.
+
+- Self-update (since v0.5.0): v0.4.0 and older have no updater, users must take v0.5.0 by hand once. Windows renames the running exe to `<exe>.<old version>.old` and deletes it on a later start. `[update] installed` tells sibling windows to only restart, `[update] skip` stops the start-up question for one version.
 
 ## Gotchas
 

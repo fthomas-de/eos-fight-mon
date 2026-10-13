@@ -1,4 +1,4 @@
-"""Tk window: cockpit on top, client ships left, everyone else right, effects as arrows in between."""
+"""Tk windows: client ships left, everyone else right, effects as arrows in between; a small cockpit window."""
 import asyncio
 import configparser
 import ctypes
@@ -7,6 +7,7 @@ import math
 import queue
 import re
 import sys
+import threading
 import tkinter as tk
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import logparse
+import update
 from fight import EWAR, REPS, TICK, WINDOW
 
 THEMES = {
@@ -26,7 +28,7 @@ OFFSET = {"dmg": -6, "shield": 0, "armor": 0, "hull": 0, "cap": 3, "neut": 6, "n
 LEGEND = [("Damage", "dmg"), ("Reps", "shield"), ("Cap", "cap"), ("Neut/Nos", "neut"), ("Scram/Point/Jam", "scram")]
 GROUPS = [("Damage", "dmg", {"dmg"}), ("Reps", "shield", REPS - {"cap"}), ("Cap", "cap", {"cap"}),
           ("Neut/Nos", "neut", {"neut", "nos"})]
-BOX_W, COCKPIT_H = 290, 70
+BOX_W = 290
 FONT = "Segoe UI"
 
 
@@ -51,16 +53,8 @@ def ship_icon(ship):
     return _images[ship]
 
 
-def draw(cv, ticks, th):
-    """Draw a fight up to its last tick: cockpit with team sums, ships with per-second rates of the last 10 s."""
-    cv.delete("all")
-    w, h = cv.winfo_width(), cv.winfo_height()
-    if not ticks:
-        cv.create_text(w / 2, h / 2, text="Waiting for a fight …", fill=th["dim"], font=(FONT, 16))
-        return
-    last = ticks[-1]
-    ships, left_names = last["ships"], set(last["left"])
-    window = ticks[-WINDOW:]
+def _rates(window):
+    """Per-second rates of the given ticks plus the ewar seen in them."""
     secs = TICK * len(window)
     rates, ewar = defaultdict(float), set()
     for t in window:
@@ -69,7 +63,19 @@ def draw(cv, ticks, th):
                 ewar.add((k, s, d))
             else:
                 rates[(k, s, d)] += a / secs
-    _cockpit(cv, w, th, ticks, rates, left_names)
+    return rates, ewar
+
+
+def draw(cv, ticks, th):
+    """Draw a fight up to its last tick: ships with per-second rates of the last 10 s."""
+    cv.delete("all")
+    w, h = cv.winfo_width(), cv.winfo_height()
+    if not ticks:
+        cv.create_text(w / 2, h / 2, text="Waiting for a fight …", fill=th["dim"], font=(FONT, 16))
+        return
+    last = ticks[-1]
+    ships, left_names = last["ships"], set(last["left"])
+    rates, ewar = _rates(ticks[-WINDOW:])
 
     out_dmg, in_dmg, in_rep = defaultdict(float), defaultdict(float), defaultdict(float)
     for (k, s, d), r in rates.items():
@@ -82,7 +88,7 @@ def draw(cv, ticks, th):
     left = sorted(n for n in names if n in left_names)
     right = sorted(names - set(left), key=lambda n: -(out_dmg[n] + in_dmg[n] + in_rep[n]))
 
-    top, usable = COCKPIT_H + 10, h - COCKPIT_H - 40
+    top, usable = 10, h - 50
     row = max(38, min(56, usable / max(1, len(left), len(right))))  # a 10 man team always fits
     rows = max(2, int(usable // row))
     if len(right) > rows:
@@ -115,32 +121,42 @@ def draw(cv, ticks, th):
         x = cv.bbox(cv.create_text(x + 26, h - 14, anchor="w", text=label, fill=th["dim"], font=(FONT, 9)))[2] + 18
 
 
-def _cockpit(cv, w, th, ticks, rates, left_names):
-    """Fight clock plus the team's outgoing/incoming sums: per second now and over the whole fight."""
-    total = defaultdict(float)
-    for t in ticks:
-        for k, s, d, a in t["flows"]:
-            total[(k, s in left_names, d in left_names)] += a
-    now = defaultdict(float)
-    for (k, s, d), r in rates.items():
-        now[(k, s in left_names, d in left_names)] += r
+def summary(ticks):
+    """Fight seconds and per group the team's (out/s, in/s, Σ out, Σ in): /s over the last 10 s, Σ over the fight."""
+    if not ticks:
+        return 0, {label: (0, 0, 0, 0) for label, _, _ in GROUPS}
+    left_names = set(ticks[-1]["left"])
+
+    def by_side(items):
+        out = defaultdict(float)
+        for (k, s, d), v in items:
+            out[(k, s in left_names, d in left_names)] += v
+        return out
+    now = by_side(_rates(ticks[-WINDOW:])[0].items())
+    total = by_side(((k, s, d), a) for t in ticks for k, s, d, a in t["flows"])
 
     def side(values, kinds, outgoing):
         return sum(v for (k, s_left, d_left), v in values.items() if k in kinds and (s_left if outgoing else d_left))
-
     secs = ticks[-1]["t"] - ticks[-1].get("start", ticks[0]["t"]) + TICK
-    col_w = 175
-    x = max(20, (w - 120 - col_w * len(GROUPS)) / 2)
-    cv.create_rectangle(x - 10, 6, x + 120 + col_w * len(GROUPS), COCKPIT_H - 4, fill=th["panel"], outline=th["dim"])
-    cv.create_text(x + 50, COCKPIT_H / 2, text=_mmss(secs), fill=th["accent"],
-                   font=(FONT, 20, "bold"))
-    x += 120
-    for label, color_kind, kinds in GROUPS:
-        cv.create_text(x, 12, anchor="nw", text=label, fill=COLORS[color_kind], font=(FONT, 10, "bold"))
-        for i, (word, outgoing) in enumerate((("out", True), ("in", False))):
-            text = f"{word} {fmt(side(now, kinds, outgoing))}/s   Σ {fmt(side(total, kinds, outgoing))}"
-            cv.create_text(x, 32 + i * 16, anchor="nw", text=text, fill=th["fg"], font=(FONT, 9))
-        x += col_w
+    return secs, {label: (side(now, kinds, True), side(now, kinds, False), side(total, kinds, True),
+                          side(total, kinds, False)) for label, _, kinds in GROUPS}
+
+
+def draw_cockpit(cv, ticks, th):
+    """The small cockpit window: fight clock, then one row per group with the team's sums."""
+    cv.delete("all")
+    w = cv.winfo_width()
+    secs, groups = summary(ticks)
+    cv.create_text(10, 6, anchor="nw", text=_mmss(secs), fill=th["accent"], font=(FONT, 16, "bold"))
+    col = (w - 100) / 4
+    xs = [w - 10 - (3 - i) * col for i in range(4)]
+    for x, head in zip(xs, ("out/s", "in/s", "Σ out", "Σ in")):
+        cv.create_text(x, 30, anchor="se", text=head, fill=th["dim"], font=(FONT, 9))
+    for row, (label, color_kind, _) in enumerate(GROUPS):
+        y = 44 + row * 20
+        cv.create_text(10, y, anchor="w", text=label, fill=COLORS[color_kind], font=(FONT, 10, "bold"))
+        for x, v in zip(xs, groups[label]):
+            cv.create_text(x, y, anchor="e", text=fmt(v), fill=th["fg"], font=(FONT, 10))
 
 
 def _arrow(cv, pos, kind, s, d, width, dash=None):
@@ -227,6 +243,7 @@ class App:
         tk.Label(self.bar, textvariable=self.warning, bg=th["panel"], fg=COLORS["dmg"],
                  font=(FONT, 10, "bold")).pack(side="left", padx=10)
         self._button(self.bar, "Settings", self._settings).pack(side="right", padx=4, pady=4)
+        self._button(self.bar, "Cockpit", self._toggle_cockpit).pack(side="right", padx=4)
         self._button(self.bar, "Replays", lambda: self.call(backend.history)).pack(side="right", padx=4)
         if mode == "server":  # only the server may end a fight early
             self._button(self.bar, "Reset", lambda: self.call(backend.reset)).pack(side="right", padx=4)
@@ -250,16 +267,62 @@ class App:
         self.canvas = tk.Canvas(root, bg=th["bg"], highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda e: self.redraw())
+
+        self.cockpit, self._cockpit_geo = None, None
+        saved = cfg["windows"].get(self._window_key(self._char()) + ".cockpit") if cfg.has_section("windows") else None
+        if saved != "off":
+            self._open_cockpit(saved)
+        self._apply_topmost()
         root.after(100, self._drain)
+        if update.can_install() and cfg.getboolean("update", "check"):
+            root.after(3000, lambda: self._check_update(manual=False))
 
     def _button(self, parent, text, cmd):
         th = self.th
         return tk.Button(parent, text=text, command=cmd, bg=th["bg"], fg=th["fg"], relief="flat",
                          activebackground=th["accent"], activeforeground=th["bg"], padx=8)
 
+    def _char(self):
+        return self.char.get() if self.mode == "client" else None
+
     def _title(self):
         who = f"Client – {self.char.get() or 'no character'}" if self.mode == "client" else "Server"
         self.root.title(f"eos-fight-mon – {who}")
+        if getattr(self, "cockpit", None):
+            self.cockpit.title(f"Cockpit – {self._char() or 'Server'}")
+
+    # --- cockpit window ---
+
+    def _open_cockpit(self, geometry=None):
+        top = self.cockpit = tk.Toplevel(self.root, bg=self.th["bg"])  # not transient: stays when the main one is minimized
+        top.minsize(280, 120)
+        top.geometry("340x124")
+        geometry = geometry or self._cockpit_geo
+        if (m := re.fullmatch(r"\d+x\d+\+(-?\d+)\+(-?\d+)", geometry or "")) and _on_screen(*map(int, m.groups())):
+            top.geometry(geometry)
+        if sys.platform == "win32":
+            top.attributes("-toolwindow", True)  # thin title bar
+        top.protocol("WM_DELETE_WINDOW", self._toggle_cockpit)
+        self.cockpit_canvas = tk.Canvas(top, bg=self.th["bg"], highlightthickness=0)
+        self.cockpit_canvas.pack(fill="both", expand=True)
+        self.cockpit_canvas.bind("<Configure>", lambda e: self.redraw())
+        self._title()
+        self._apply_topmost()
+
+    def _toggle_cockpit(self):
+        if self.cockpit:
+            self._cockpit_geo = self.cockpit.geometry()
+            self.cockpit.destroy()
+            self.cockpit = None
+        else:
+            self._open_cockpit()
+
+    def _apply_topmost(self):
+        """Keep the windows above the game (works with EVE in window or fixed window mode, not in fullscreen)."""
+        on = self.cfg.getboolean("general", "always_on_top")
+        for win in (self.root, self.cockpit):
+            if win:
+                win.attributes("-topmost", on)
 
     def restart(self, char):
         """Reopen the window as a fresh program, e.g. after switching between client and server."""
@@ -277,9 +340,10 @@ class App:
     def _save_window(self):
         root = self.root
         geometry = "zoomed" if root.state() == "zoomed" else root.geometry()
-        char = self.char.get() if self.mode == "client" else None
+        key = self._window_key(self._char())
         try:
-            update_config(self.cfg_path, {"windows": {self._window_key(char): geometry}})
+            update_config(self.cfg_path, {"windows": {key: geometry,
+                                                      key + ".cockpit": self.cockpit.geometry() if self.cockpit else "off"}})
         except OSError:
             pass  # a read-only folder must not keep the window from closing
         return geometry
@@ -293,7 +357,10 @@ class App:
         asyncio.run_coroutine_threadsafe(fn(*args), self.loop)
 
     def redraw(self):
-        draw(self.canvas, self.replay[:self.pos + 1] if self.replay is not None else self.live, self.th)
+        ticks = self.replay[:self.pos + 1] if self.replay is not None else self.live
+        draw(self.canvas, ticks, self.th)
+        if self.cockpit:
+            draw_cockpit(self.cockpit_canvas, ticks, self.th)
 
     def _drain(self):
         """Handle what the network thread queued."""
@@ -313,6 +380,12 @@ class App:
                     self._history(msg["sessions"])
                 elif kind == "session":
                     self._start_replay(msg["ticks"])
+                elif kind == "update":
+                    self._offer_update(msg)
+                elif kind == "updated":
+                    update_config(self.cfg_path, {"update": {"installed": msg["tag"]}})  # tells the other windows
+                    self.restart(self._char())
+                    return
                 if kind in ("tick", "reset") and self.replay is None:
                     self.redraw()
         except queue.Empty:
@@ -398,6 +471,55 @@ class App:
         self.replay_bar.pack_forget()
         self.redraw()
 
+    # --- update ---
+
+    def _check_update(self, manual):
+        """Ask GitHub in the background; the answer comes back through the queue."""
+        if not update.can_install():
+            self.status.set("running from source: no self-update")
+            return
+
+        def run():
+            try:
+                found = update.latest()
+            except (OSError, ValueError, KeyError) as e:
+                if manual:
+                    self.q.put({"type": "status", "text": f"update check failed: {e}"})
+                return
+            if found:
+                self.q.put({"type": "update", "tag": found[0], "assets": found[1], "manual": manual})
+            elif manual:
+                self.q.put({"type": "status", "text": f"v{update.VERSION} is the newest version"})
+        threading.Thread(target=run, daemon=True).start()
+
+    def _offer_update(self, msg):
+        tag = msg["tag"]
+        state = configparser.ConfigParser(interpolation=None)
+        state.read(self.cfg_path, encoding="utf-8-sig")  # fresh: another window may have installed it already
+        state = state["update"] if state.has_section("update") else {}
+        if state.get("installed") == tag:
+            if messagebox.askyesno("Update", f"{tag} was installed by another eos-fight-mon window.\n\n"
+                                   "Restart this window with it now?", parent=self.root):
+                self.restart(self._char())
+            return
+        if not msg["manual"] and state.get("skip") == tag:
+            return
+        if not messagebox.askyesno("Update", f"eos-fight-mon {tag} is available (this is v{update.VERSION}).\n\n"
+                                   "Download and install it now? The window restarts afterwards.\n\n"
+                                   "No: not asked again for this version (Settings › Check for updates still does).",
+                                   parent=self.root):
+            update_config(self.cfg_path, {"update": {"skip": tag}})
+            return
+        self.status.set(f"downloading {tag} …")
+
+        def run():
+            try:
+                update.install(msg["assets"])
+                self.q.put({"type": "updated", "tag": tag})
+            except (OSError, ValueError, KeyError) as e:
+                self.q.put({"type": "status", "text": f"update failed: {e}"})
+        threading.Thread(target=run, daemon=True).start()
+
     # --- settings ---
 
     def _dialog(self, title):
@@ -410,6 +532,8 @@ class App:
         top = self._dialog("Settings")
         fields = [("Mode", "general", "mode"), ("Server address or connection code", "client", "host"),
                   ("Port", "general", "port"), ("Token", "general", "token"), ("Fight ends after idle seconds", "general", "idle_end"),
+                  ("Always on top (over EVE in window mode)", "general", "always_on_top"),
+                  ("Check for updates at start", "update", "check"),
                   ("Log folder", "client", "log_dir")]  # log folder last: the browse button sits in its row
         values = {}
         for row, (label, sec, key) in enumerate(fields):
@@ -419,6 +543,11 @@ class App:
             if key == "mode":
                 ttk.Combobox(top, textvariable=var, values=["client", "server"], state="readonly", width=12).grid(
                     row=row, column=1, sticky="w", padx=10)
+            elif key in ("always_on_top", "check"):
+                var.set("yes" if self.cfg.getboolean(sec, key) else "no")
+                tk.Checkbutton(top, variable=var, onvalue="yes", offvalue="no", bg=self.th["bg"],
+                               activebackground=self.th["bg"], selectcolor=self.th["panel"]).grid(
+                    row=row, column=1, sticky="w", padx=6)
             else:
                 tk.Entry(top, textvariable=var, width=50).grid(row=row, column=1, padx=10)
         log_dir = values[("client", "log_dir")]
@@ -444,6 +573,7 @@ class App:
                 self.cfg[sec][key] = new.setdefault(sec, {})[key] = values[(sec, key)].get().strip()
             update_config(self.cfg_path, new)
             top.destroy()
+            self._apply_topmost()
             # the rest is read live; a server keeps its running fight unless mode or port change
             reload = {("general", "mode"), ("general", "port")}
             if self.mode == "client":
@@ -452,6 +582,8 @@ class App:
                 self.restart(self.char.get() if self.mode == "client" else None)
             else:
                 self.status.set("settings saved")
+        self._button(top, "Check for updates", lambda: self._check_update(manual=True)).grid(
+            row=len(fields), column=0, sticky="w", padx=10, pady=10)
         self._button(top, "Save", save).grid(row=len(fields), column=1, sticky="e", padx=10, pady=10)
 
 

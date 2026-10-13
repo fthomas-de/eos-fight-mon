@@ -4,7 +4,9 @@ Live view of the current EVE Online fight. Clients read their gamelogs, the serv
 
 - **Left**: the ships of all connected clients. **Right**: everyone else. Drone damage counts for the drone's owner; drones whose owner the log does not name are grouped on the right.
 - Arrows for damage, remote reps (shield/armor/hull/cap), neut/nos and scram/point/jam (dashed), as per-second rates over the last 10 s.
-- Cockpit on top: fight clock and the team's incoming/outgoing sums, per second and for the whole fight.
+- Cockpit: a small separate window with the fight clock and the team's incoming/outgoing sums, per second and for the whole fight. The *Cockpit* button opens and closes it; it stays when the main window is minimized and remembers its place per character.
+- *Always on top* in *Settings* keeps both windows above the game. That works with EVE in window or fixed window mode, not in exclusive fullscreen.
+- Updates: on start the exe asks GitHub for a newer release and offers to install it. *Yes* downloads it, checks it against `SHA256SUMS.txt`, replaces the exe and restarts; *No* skips that version (*Settings › Check for updates* asks anyway). Other open windows then offer a restart only. Can be turned off (`[update] check`).
 - The server works in 2 s ticks and alone decides what a fight is: it starts with the first event and ends after 60 s without one (`idle_end`, adjustable in *Settings*) (or on *Reset* in the server window / `--reset` on the server machine; clients cannot reset). Clients fetch every stored fight of the last 7 days automatically; *Replays* (newest first) plays them with start/stop and a slider.
 - Without a server connection a client shows only its own ship on the left and its enemies on the right; ships that only rep it are hidden (their reps still count in the cockpit). Nothing is stored then.
 - Friendly fire is not shown: hostile effects between clients and ships that rep with them are dropped.
@@ -37,7 +39,7 @@ The address in the code is the server's public internet address, asked from api.
 
 The connection is not encrypted; the token keeps strangers out, but anyone who can read the traffic could read fight data and the token.
 
-The tool only reads the gamelogs and only writes next to itself (`config.ini`, `history/`).
+The tool only reads the gamelogs and only writes next to itself (`config.ini`, `history/`, the exe on update). Network: the server connection, api.ipify.org (server, for its address) and api.github.com/github.com (update check).
 
 ## config.ini
 
@@ -53,12 +55,18 @@ history_dir = history
 idle_end = 60
 # server only: address clients use, e.g. a DynDNS name; empty = ask api.ipify.org
 public_address =
+# keep the windows above the game
+always_on_top = no
 
 [client]
 # address of the server
 host = localhost
 log_dir = ~/Documents/EVE/logs/Gamelogs
 auto_connect = yes
+
+[update]
+# ask GitHub for a newer version on start (the headless server only prints it)
+check = yes
 ```
 
 Everything can also be changed in the window under *Settings*. The server must be reachable on the port via TCP.

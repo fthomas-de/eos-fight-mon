@@ -13,6 +13,7 @@ Live view of the current EVE fight without affecting game performance. One execu
 | `net.py` | TCP, one JSON message per line, token, reconnect every 15 s, replay sync |
 | `ui.py` | tkinter canvas, cockpit, client and server theme, replay, settings |
 | `main.py` | command line, config, start |
+| `update.py` | version, update check and install |
 
 ## Decisions
 
@@ -23,7 +24,9 @@ Live view of the current EVE fight without affecting game performance. One execu
 - **Sides**: left the clients' characters (`Listener:` in the log header), right everyone else.
 - **Drones**: damage is logged with the owner as source, so it counts for the owner. Drones acting on their own (e.g. EC drones) or being targeted have no known owner and form one entry on the right.
 - **Replays**: stored on the server as `history/<start UTC>.jsonl.gz`; clients fetch the last 7 days on connect and after each fight. Late clients get the running fight from its start.
-- **Cockpit**: clock plus team sums in/out, per second and total.
+- **Cockpit**: clock plus team sums in/out, per second and total, in its own small window.
+- **Always on top** optional, for both windows.
+- **Self-update** from GitHub releases, only after asking; checked against SHA256SUMS; the running exe is renamed, not overwritten.
 - **Connection code** `IP:port/token` to copy, instead of a browser link (that would need a registry entry).
 - **Friendly fire** (hostile effects between clients and their rep partners) is dropped.
 - **Internet**: server listens on all interfaces; connection code uses the public address (`public_address` or api.ipify.org). No TLS.

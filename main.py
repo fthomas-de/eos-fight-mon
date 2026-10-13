@@ -12,12 +12,14 @@ from pathlib import Path
 
 import logparse
 import net
+import update
 
 BASE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 DEFAULTS = {
     "general": {"mode": "client", "port": "47110", "token": "", "history_dir": "history",
-                "public_address": "", "idle_end": "60"},
+                "public_address": "", "idle_end": "60", "always_on_top": "no"},
     "client": {"host": "localhost", "log_dir": "~/Documents/EVE/logs/Gamelogs", "auto_connect": "yes"},
+    "update": {"check": "yes"},
 }
 
 
@@ -60,10 +62,12 @@ def main():
     ap.add_argument("--reset", action="store_true", help="end the running fight of the server on this machine")
     ap.add_argument("--geometry", help="window size and place, WxH+X+Y or zoomed (kept on restart)")
     ap.add_argument("--char", help="character of this instance (default: most recently active)")
+    ap.add_argument("--version", action="version", version=f"eos-fight-mon {update.VERSION}")
     ap.add_argument("--config", default=str(BASE / "config.ini"), help="path to config.ini")
     args = ap.parse_args()
     cfg_path = Path(args.config).resolve()
     os.chdir(BASE)  # relative paths in the config (history) live next to the program
+    update.cleanup()
     cfg = load_config(cfg_path)
     if args.reset:
         print(asyncio.run(net.send_reset(cfg)), flush=True)
@@ -76,6 +80,12 @@ def main():
 
     if args.headless:
         print(f"eos-fight-mon server running. Connection code for clients: {code}", flush=True)
+        if cfg.getboolean("update", "check"):
+            try:
+                if found := update.latest():
+                    print(f"{found[0]} is available: https://github.com/{update.REPO}/releases/latest", flush=True)
+            except (OSError, ValueError, KeyError):
+                pass
         asyncio.run(net.Server(cfg, lambda msg: None).run())
         return
 
