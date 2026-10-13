@@ -1,8 +1,11 @@
 """Tk window: cockpit on top, client ships left, everyone else right, effects as arrows in between."""
 import asyncio
+import configparser
+import ctypes
 import math
 import queue
 import re
+import sys
 import tkinter as tk
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -130,6 +133,27 @@ def _arrow(cv, pos, kind, s, d, width, dash=None):
         cv.create_line(x1, y1, x2, y2, **opts)
 
 
+def update_config(path, values):
+    """Change single keys in the file as it is now, so parallel instances never undo each other's changes."""
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.read(path, encoding="utf-8-sig")
+    for sec, keys in values.items():
+        if not cfg.has_section(sec):
+            cfg.add_section(sec)
+        cfg[sec].update(keys)
+    with open(path, "w", encoding="utf-8") as fh:
+        cfg.write(fh)
+
+
+def _on_screen(x, y):
+    """Is a window corner at x, y still on some monitor (e.g. after unplugging one)?"""
+    if sys.platform != "win32":
+        return True
+    m = ctypes.windll.user32.GetSystemMetrics  # virtual screen = all monitors together
+    left, top = m(76), m(77)
+    return left <= x <= left + m(78) - 100 and top <= y <= top + m(79) - 100
+
+
 def fight_label(name):
     """'20261013_191334.jsonl.gz' (UTC) -> '2026-10-13  21:13:34' (local time)."""
     start = datetime.strptime(name[:15], "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
@@ -148,10 +172,13 @@ class App:
         root = self.root = tk.Tk()
         root.minsize(900, 560)
         root.geometry("1150x720")
+        if cfg.has_section("windows"):  # last place of this window, unless a restart passed one
+            geometry = geometry or cfg["windows"].get(self._window_key(getattr(backend, "char", None)))
         if geometry == "zoomed":
             root.state("zoomed")
-        elif geometry and re.fullmatch(r"\d+x\d+[+-]-?\d+[+-]-?\d+", geometry):
+        elif (m := re.fullmatch(r"\d+x\d+\+(-?\d+)\+(-?\d+)", geometry or "")) and _on_screen(*map(int, m.groups())):
             root.geometry(geometry)
+        root.protocol("WM_DELETE_WINDOW", self._close)
         root.configure(bg=th["bg"])
 
         self.bar = tk.Frame(root, bg=th["panel"])
@@ -213,9 +240,26 @@ class App:
 
     def restart(self, char):
         """Reopen the window as a fresh program, e.g. after switching between client and server."""
+        self._restart(char, self._save_window())  # same size and place
+        self.root.destroy()
+
+    def _close(self):
+        self._save_window()
+        self.root.destroy()
+
+    def _window_key(self, char):
+        # one entry per character, since several client instances run side by side
+        return "server" if self.mode == "server" else char or "client"
+
+    def _save_window(self):
         root = self.root
-        self._restart(char, "zoomed" if root.state() == "zoomed" else root.geometry())  # same size and place
-        root.destroy()
+        geometry = "zoomed" if root.state() == "zoomed" else root.geometry()
+        char = self.char.get() if self.mode == "client" else None
+        try:
+            update_config(self.cfg_path, {"windows": {self._window_key(char): geometry}})
+        except OSError:
+            pass  # a read-only folder must not keep the window from closing
+        return geometry
 
     def _copy(self, text):
         self.root.clipboard_clear()
@@ -372,10 +416,10 @@ class App:
                 messagebox.showerror("Settings", "Idle seconds must be a number from 5 to 3600.", parent=top)
                 return
             changed = {k for k, var in values.items() if self.cfg[k[0]][k[1]] != var.get().strip()}
-            for (sec, key), var in values.items():
-                self.cfg[sec][key] = var.get().strip()
-            with open(self.cfg_path, "w", encoding="utf-8") as fh:
-                self.cfg.write(fh)
+            new = {}
+            for sec, key in changed:
+                self.cfg[sec][key] = new.setdefault(sec, {})[key] = values[(sec, key)].get().strip()
+            update_config(self.cfg_path, new)
             top.destroy()
             # the rest is read live; a server keeps its running fight unless mode or port change
             reload = {("general", "mode"), ("general", "port")}
