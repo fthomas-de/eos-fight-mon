@@ -21,6 +21,9 @@ SHIELD_BY = P + ("<color=0xffccff66><b>75</b><color=0x77ffffff><font size=10> re
 CAP_TO = P + ("<color=0xffccff66><b>122</b><color=0x77ffffff><font size=10> remote capacitor transmitted to </font>"
               "<b><color=0xffffffff>Friend One [XYZ]&lt;ALLY&gt; (Gila)'1'</b><color=0x77ffffff><font size=10>"
               " - Corpum C-Type Medium Remote Capacitor Transmitter</font>")
+CAP_BY_OLD = P + ("<color=0xffccff66><b>122</b><color=0x77ffffff><font size=10> remote capacitor transmitted by </font>"
+                  "<b><color=0xffffffff>Friend One [XYZ]&lt;ALLY&gt;'1'(Gila)</b><color=0x77ffffff><font size=10>"
+                  " - Corpum C-Type Medium Remote Capacitor Transmitter</font>")  # older logs: label before ship
 ARMOR_BY = P + ("<color=0xffccff66><b>493</b><color=0x77ffffff><font size=10> remote armor repaired by </font>"
                 "<b><color=0xffffffff><font size=12><color=0xFF40FFFF><b>Guardian</b> </color></font></b>"
                 "<color=0x77ffffff><font size=10> - Large Solace Scoped Remote Armor Repairer</font>")
@@ -54,6 +57,8 @@ class ParseTest(unittest.TestCase):
             DMG_OUT: Event("dmg", ME, None, "Foe Two", "Orthrus", 23, "Republic Fleet Warrior", ME),
             DMG_NPC: Event("dmg", "Siphoning Guardian", None, ME, None, 16, None, ME),
             SHIELD_BY: Event("shield", "Friend One", "Gila", ME, None, 75, "Small Murky Compact Remote Shield Booster", ME),
+            CAP_BY_OLD: Event("cap", "Friend One", "Gila", ME, None, 122,
+                              "Corpum C-Type Medium Remote Capacitor Transmitter", ME),
             CAP_TO: Event("cap", ME, None, "Friend One", "Gila", 122,
                           "Corpum C-Type Medium Remote Capacitor Transmitter", ME),
             ARMOR_BY: Event("armor", "Guardian", None, ME, None, 493, "Large Solace Scoped Remote Armor Repairer", ME),

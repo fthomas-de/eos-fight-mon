@@ -13,7 +13,8 @@ KINDS = {"dmg", "shield", "armor", "hull", "cap", "neut", "nos", "scram", "point
 _LINE = re.compile(r"\[ [\d.: ]+ \] \(combat\) (.*)")
 _TAG = re.compile(r"<[^>]*>")
 _INCOMING = ("<color=0xffcc0000>", "<color=0xffe57f7f>")  # red: done to the listener, cyan: done by them
-_PARTY = re.compile(r"(.+?)\s*\[[^\]]*\](?:<[^>]*>)?\s*\((.+?)\)(?:'.*')?")
+# the 'label' stands after the ship in newer logs, before it in older ones
+_PARTY = re.compile(r"(.+?)\s*\[[^\]]*\](?:<[^>]*>)?\s*(?:'[^']*')?\s*\((.+?)\)(?:'.*')?")
 _REMOTE_KIND = {"shield": "shield", "armor": "armor", "hull": "hull", "capacitor": "cap"}
 
 _DMG = re.compile(r"(\d+) (to|from) (.+)")
