@@ -15,6 +15,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import logparse
+import snap
 import update
 from fight import EWAR, REPS, TICK, WINDOW
 
@@ -24,10 +25,13 @@ THEMES = {
 }
 COLORS = {"dmg": "#e5484d", "shield": "#30a46c", "armor": "#30a46c", "hull": "#30a46c", "cap": "#e2b93b",
           "neut": "#9d5bd2", "nos": "#9d5bd2", "scram": "#f76b15", "point": "#f76b15", "jam": "#f76b15"}
-OFFSET = {"dmg": -6, "shield": 0, "armor": 0, "hull": 0, "cap": 3, "neut": 6, "nos": 6, "scram": 9, "point": 9, "jam": 9}
+OFFSET = {"dmg": -9, "shield": 0, "armor": 0, "hull": 0, "cap": 5, "neut": 9, "nos": 9, "scram": 14, "point": 14, "jam": 14}
+LANE = {k: sorted(set(OFFSET.values())).index(v) for k, v in OFFSET.items()}  # 0 = damage … 4 = scram
 LEGEND = [("Damage", "dmg"), ("Reps", "shield"), ("Cap", "cap"), ("Neut/Nos", "neut"), ("Scram/Point/Jam", "scram")]
 GROUPS = [("Damage", "dmg", {"dmg"}), ("Reps", "shield", REPS - {"cap"}), ("Cap", "cap", {"cap"}),
           ("Neut/Nos", "neut", {"neut", "nos"})]
+NAMES = {"dmg": "Damage", "shield": "Shield reps", "armor": "Armor reps", "hull": "Hull reps", "cap": "Cap transfer",
+         "neut": "Neut", "nos": "Nos", "scram": "Scram", "point": "Point", "jam": "Jam"}
 BOX_W = 290
 FONT = "Segoe UI"
 
@@ -35,6 +39,16 @@ FONT = "Segoe UI"
 def fmt(v):
     return f"{v / 1e6:.1f}M" if v >= 1e6 else f"{v / 1000:.1f}k" if v >= 1000 else f"{v:.0f}"
 
+
+# window and taskbar icon, 32 px PNG (the exe itself gets icon.ico from the build)
+APP_ICON = ("iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAB6klEQVR42tWX7W3CMBCGHyIGSDfICGwAnaBZoRM03YBOQDsBMAF0"
+            "AmCCsAHZIJnA9EfO9OQ6jiNBSy1Fkc6+T9+9d4b/sgxkBgoDOwO1gbPz1bJXGMiuqXgigs8Dv42BSZ/8UY/yBVA45AY4AgeHPqVVmDr0"
+            "9wReh3qdGigdj3YG8gje3BOx0vw0LFp5HaO4w5B6sBGO8njL45wp+xgW11IeMGIRynYd9jQgcOmEtxZaiEefn/gObdSBfEByRiWb5MSl"
+            "RH0gc8n2QDjnEfU/D/Dr6sgAEtnTHn8ErnQace2hM1p27rOs7kmoTQwC9siodaRtBGxSHCM8bIBnYKVoK6E1EfxHrdMaYBPn0MN8AKqk"
+            "VbhWCtdCqyJlXHSOB5Z1hZSrikZDe4V2vQ0RmAw0wG2ze/lCZ4JrHIlmmXi6kv+TZLGuni3wCWwFC9KkjViUgjqEAQLRpUWwjvlgpxC1"
+            "7IJct+JGlgjMgCaBB5+BKlErCXvqqY6ZuoI+WfsEHi2xCMGwaQVbOF0aOKkeYKN3kr1c8wTguNBJuFXnXjpCNxPLU+Vlxfc9Z3bfp9wj"
+            "exvC6bwjR86+wdMZWM8+VA02o752LE0oaj5QHXM+qB3/+UByFyPZXQylvz2W3+fDxFMdm1s9ze7/cXrr9QX3jDlxpIDpYwAAAABJRU5E"
+            "rkJggg==")
 
 _ICON_FILE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "ship_icons.json"  # packed into the exe
 _icons, _images = None, {}
@@ -66,8 +80,8 @@ def _rates(window):
     return rates, ewar
 
 
-def draw(cv, ticks, th):
-    """Draw a fight up to its last tick: ships with per-second rates of the last 10 s."""
+def draw(cv, ticks, th, hover=None):
+    """Draw a fight up to its last tick: ships with per-second rates of the last 10 s; hover (x, y) shows the arrows there."""
     cv.delete("all")
     w, h = cv.winfo_width(), cv.winfo_height()
     if not ticks:
@@ -93,7 +107,7 @@ def draw(cv, ticks, th):
     rows = max(2, int(usable // row))
     if len(right) > rows:
         right = right[:rows - 1] + [f"+{len(right) - rows + 1} more"]
-    pos = {}
+    pos, tips = {}, {}
     for col, column in enumerate((left[:rows], right)):
         x = 20 if col == 0 else w - 20 - BOX_W
         for i, n in enumerate(column):
@@ -101,9 +115,11 @@ def draw(cv, ticks, th):
             pos[n] = (x + BOX_W if col == 0 else x, y + (row - 6) / 2, col, x, y)
 
     for (k, s, d), r in rates.items():
-        _arrow(cv, pos, k, s, d, 1 + min(6, math.log10(1 + r)))
+        if item := _arrow(cv, pos, k, s, d, 1 + min(6, math.log10(1 + r))):
+            tips[item] = f"{NAMES[k]}  {s} → {d}  {fmt(r)}/s"
     for k, s, d in ewar:
-        _arrow(cv, pos, k, s, d, 2, dash=(4, 3))
+        if item := _arrow(cv, pos, k, s, d, 2, dash=(4, 3)):
+            tips[item] = f"{NAMES[k]}  {s} → {d}"
     for n, (_, _, col, x, y) in pos.items():
         cv.create_rectangle(x, y, x + BOX_W, y + row - 6, fill=th["panel"],
                             outline=th["accent"] if col == 0 else th["dim"])
@@ -119,6 +135,18 @@ def draw(cv, ticks, th):
     for label, kind in LEGEND:
         cv.create_line(x, h - 14, x + 20, h - 14, fill=COLORS[kind], width=3)
         x = cv.bbox(cv.create_text(x + 26, h - 14, anchor="w", text=label, fill=th["dim"], font=(FONT, 9)))[2] + 18
+
+    if hover and (hits := [i for i in cv.find_overlapping(hover[0] - 4, hover[1] - 4, hover[0] + 4, hover[1] + 4)
+                           if i in tips]):
+        for i in hits:
+            cv.itemconfigure(i, width=float(cv.itemcget(i, "width")) + 2)
+        text = cv.create_text(hover[0] + 14, hover[1] + 14, anchor="nw", text="\n".join(tips[i] for i in hits),
+                              fill=th["fg"], font=(FONT, 9))
+        x1, y1, x2, y2 = cv.bbox(text)
+        dx, dy = min(0, w - 6 - x2), min(0, h - 6 - y2)  # keep the box inside the canvas
+        cv.move(text, dx, dy)
+        cv.tag_lower(cv.create_rectangle(x1 - 6 + dx, y1 - 4 + dy, x2 + 6 + dx, y2 + 4 + dy, fill=th["panel"],
+                                         outline=th["accent"]), text)
 
 
 def summary(ticks):
@@ -229,6 +257,7 @@ def draw_graph(cv, ticks, th, hover=None):
                        font=(FONT, 8, "bold"))
 
 
+MAIN_SIZE = "1150x720"
 PANELS = {  # small extra windows: title, default size, min size, painter
     "cockpit": ("Cockpit", "340x124", (280, 120), draw_cockpit),
     "graph": ("Graph", "460x320", (320, 220), draw_graph),
@@ -240,12 +269,13 @@ def _arrow(cv, pos, kind, s, d, width, dash=None):
         return
     (x1, y1, c1, *_), (x2, y2, c2, *_) = pos[s], pos[d]
     y1, y2 = y1 + OFFSET[kind], y2 + OFFSET[kind]
-    opts = {"fill": COLORS[kind], "width": width, "dash": dash, "arrow": "last"}
-    if c1 == c2:  # same side: bow towards the middle
-        mx = x1 + (140 if c1 == 0 else -140)
-        cv.create_line(x1, y1, mx, (y1 + y2) / 2, x2, y2, smooth=True, **opts)
-    else:
-        cv.create_line(x1, y1, x2, y2, **opts)
+    opts = {"fill": COLORS[kind], "width": width, "dash": dash, "arrow": "last",
+            "arrowshape": (10 + 2 * width, 12 + 2 * width, 5 + width)}
+    if c1 == c2:  # same side: bow towards the middle, one lane per kind and direction so bows never overlap
+        depth = 50 + 30 * LANE[kind] + (15 if y2 < y1 else 0)
+        mx = x1 + (depth if c1 == 0 else -depth)
+        return cv.create_line(x1, y1, mx, y1, mx, y2, x2, y2, smooth="raw", **opts)  # leaves and enters level
+    return cv.create_line(x1, y1, x2, y2, **opts)
 
 
 def update_config(path, values):
@@ -269,6 +299,12 @@ def _on_screen(x, y):
     return left <= x <= left + m(78) - 100 and top <= y <= top + m(79) - 100
 
 
+def _valid_place(geometry):
+    """A saved "WxH+X+Y" whose corner is still on a monitor."""
+    m = re.fullmatch(r"\d+x\d+\+(-?\d+)\+(-?\d+)", geometry)
+    return bool(m) and _on_screen(*map(int, m.groups()))
+
+
 def fight_label(name):
     """'20261013_191334.jsonl.gz' (UTC) -> '2026-10-13  21:13:34' (local time)."""
     start = datetime.strptime(name[:15], "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
@@ -286,21 +322,17 @@ class App:
 
         root = self.root = tk.Tk()
         root.minsize(900, 560)
-        root.geometry("1150x720")
-        if cfg.has_section("windows"):  # last place of this window, unless a restart passed one
-            geometry = geometry or cfg["windows"].get(self._window_key(getattr(backend, "char", None)))
-        # "zoomed WxH+X+Y": the normal place picks the monitor the window maximizes on
-        geometry = geometry or ""
+        root.geometry(MAIN_SIZE)
+        root.iconphoto(True, tk.PhotoImage(data=APP_ICON))  # True: cockpit, graph and dialogs get it too
         self._normal_geo = None  # last place while neither maximized nor minimized
-        if (m := re.fullmatch(r"\d+x\d+\+(-?\d+)\+(-?\d+)", geometry.removeprefix("zoomed").strip())) \
-                and _on_screen(*map(int, m.groups())):
-            self._normal_geo = m.group()
-            root.geometry(self._normal_geo)
-        if geometry.startswith("zoomed"):
-            root.state("zoomed")
+        if geometry:  # a restart passes the place it had
+            self._place(geometry)
         root.bind("<Configure>", self._track_place, add="+")
+        self._sizes, self._snap_jobs = {}, {}
+        root.bind("<Configure>", self._on_move, add="+")
         root.protocol("WM_DELETE_WINDOW", self._close)
-        root.bind("<FocusIn>", lambda e: self._raise_group(root) if e.widget is root else None, add="+")
+        # any widget getting focus (a click often focuses a child, not the window) raises the whole group
+        root.bind_all("<FocusIn>", self._on_focus, add="+")
         root.configure(bg=th["bg"])
 
         self.bar = tk.Frame(root, bg=th["panel"])
@@ -311,6 +343,7 @@ class App:
                                postcommand=lambda: box.configure(values=logparse.characters(cfg["client"]["log_dir"])))
             box.bind("<<ComboboxSelected>>", lambda e: self._set_char())
             box.pack(side="left", padx=(10, 4), pady=4)
+            self._button(self.bar, "Paste code", self._paste_code).pack(side="left", padx=4)
         else:
             tk.Label(self.bar, text="Connection code:", bg=th["panel"], fg=th["dim"]).pack(side="left", padx=(10, 4))
             code = tk.Entry(self.bar, width=len(connect_code) + 2, bg=th["bg"], fg=th["fg"], relief="flat",
@@ -319,13 +352,18 @@ class App:
             code.configure(state="readonly")
             code.pack(side="left", pady=4)
             self._button(self.bar, "Copy", lambda: self._copy(connect_code)).pack(side="left", padx=4)
+        foot = tk.Frame(root, bg=th["panel"])  # connection messages, below everything else
+        foot.pack(side="bottom", fill="x")
+        line = tk.Frame(foot, bg=th["panel"])
+        line.pack(fill="x")
         self.status = tk.StringVar()
-        tk.Label(self.bar, textvariable=self.status, bg=th["panel"], fg=th["fg"], font=(FONT, 10)).pack(
-            side="left", padx=10)
+        tk.Label(line, textvariable=self.status, bg=th["panel"], fg=th["fg"], font=(FONT, 10)).pack(
+            side="left", padx=10, pady=2)
         self.warning = tk.StringVar()
-        tk.Label(self.bar, textvariable=self.warning, bg=th["panel"], fg=COLORS["dmg"],
+        tk.Label(line, textvariable=self.warning, bg=th["panel"], fg=COLORS["dmg"],
                  font=(FONT, 10, "bold")).pack(side="left", padx=10)
         self._button(self.bar, "Settings", self._settings).pack(side="right", padx=4, pady=4)
+        self._button(self.bar, "Reset size", self._reset_size).pack(side="right", padx=4)
         self._button(self.bar, "Graph", lambda: self._toggle_panel("graph")).pack(side="right", padx=4)
         self._button(self.bar, "Cockpit", lambda: self._toggle_panel("cockpit")).pack(side="right", padx=4)
         self._button(self.bar, "Replays", lambda: self.call(backend.history)).pack(side="right", padx=4)
@@ -337,12 +375,13 @@ class App:
             self.conn.pack(side="right", padx=4)
             self._conn_text()
         self.panels, self.panel_canvas, self._panel_geo, self._hover = {}, {}, {}, None
+        self._main_hover = None
         self._title()
         if mode == "server":  # who is connected, with the character each client picked
             self.clients = tk.StringVar(value="no client connected")
-            info = tk.Label(root, textvariable=self.clients, bg=th["bg"], fg=th["dim"], font=(FONT, 9),
+            info = tk.Label(foot, textvariable=self.clients, bg=th["panel"], fg=th["dim"], font=(FONT, 9),
                             anchor="w", justify="left")
-            info.pack(fill="x", padx=10, pady=(4, 0))
+            info.pack(fill="x", padx=10, pady=(0, 2))
             info.bind("<Configure>", lambda e: info.configure(wraplength=e.width - 10))
 
         self.replay_bar = tk.Frame(root, bg=th["panel"])
@@ -358,11 +397,10 @@ class App:
         self.canvas = tk.Canvas(root, bg=th["bg"], highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda e: self.redraw())
+        self.canvas.bind("<Motion>", lambda e: self._arrow_hover((e.x, e.y)))
+        self.canvas.bind("<Leave>", lambda e: self._arrow_hover(None))
 
-        for name in PANELS:
-            saved = cfg["windows"].get(f"{self._window_key(self._char())}.{name}") if cfg.has_section("windows") else None
-            if saved != "off":
-                self._open_panel(name, saved)
+        self._restore_layout(main=not geometry, first=True)
         root.after(100, self._drain)
         if update.can_install() and cfg.getboolean("update", "check"):
             root.after(3000, lambda: self._check_update(manual=False))
@@ -383,26 +421,76 @@ class App:
 
     # --- cockpit and graph windows ---
 
-    def _open_panel(self, name, geometry=None):
+    def _restore_layout(self, main=True, first=False):
+        """Put this character's windows where they were last time (also after picking another character).
+        A closed cockpit or graph is stored as "off WxH+X+Y" and reopens at that place."""
+        saved = configparser.ConfigParser(interpolation=None)
+        saved.read(self.cfg_path, encoding="utf-8-sig")  # fresh: other instances write the file too
+        windows = saved["windows"] if saved.has_section("windows") else {}
+        key = self._layout_key = self._window_key(self._char())
+        if main and key in windows:
+            self._place(windows[key])
+        for name in PANELS:
+            entry = windows.get(f"{key}.{name}")
+            if entry is None:  # character never saved: both open at start, else leave them as they are
+                if first:
+                    self._open_panel(name)
+                continue
+            self._panel_geo[name] = geo = entry.removeprefix("off").strip()
+            if entry.startswith("off"):
+                if top := self.panels.pop(name, None):
+                    del self.panel_canvas[name]
+                    top.destroy()
+            elif name in self.panels:
+                if _valid_place(geo):
+                    top = self.panels[name]
+                    top.geometry(geo)
+                    top.update_idletasks()
+                    # Windows hands Tk the old place back while the character list closes: set it once more
+                    self.root.after(300, lambda top=top, geo=geo: top.winfo_exists() and top.geometry(geo))
+            else:
+                self._open_panel(name)
+
+    def _place(self, geometry):
+        # "zoomed WxH+X+Y": the normal place picks the monitor the window maximizes on
+        if _valid_place(normal := geometry.removeprefix("zoomed").strip()):
+            self._normal_geo = normal
+            if self.root.state() == "zoomed":
+                self.root.state("normal")
+            self.root.geometry(normal)
+        if geometry.startswith("zoomed"):
+            self.root.state("zoomed")
+
+    def _open_panel(self, name):
         _, size, minsize, _ = PANELS[name]
         top = self.panels[name] = tk.Toplevel(self.root, bg=self.th["bg"])  # not transient: stays when the main one is minimized
         top.minsize(*minsize)
         top.geometry(size)
-        geometry = geometry or self._panel_geo.get(name)
-        if (m := re.fullmatch(r"\d+x\d+\+(-?\d+)\+(-?\d+)", geometry or "")) and _on_screen(*map(int, m.groups())):
+        if _valid_place(geometry := self._panel_geo.get(name, "")):
             top.geometry(geometry)
         if sys.platform == "win32":
             top.attributes("-toolwindow", True)  # thin title bar
         top.protocol("WM_DELETE_WINDOW", lambda: self._toggle_panel(name))
-        top.bind("<FocusIn>", lambda e: self._raise_group(top) if e.widget is top else None)
+        top.bind("<Configure>", self._on_move)
         cv = self.panel_canvas[name] = tk.Canvas(top, bg=self.th["bg"], highlightthickness=0)
         cv.pack(fill="both", expand=True)
         cv.bind("<Configure>", lambda e: self.redraw())
+        tk.Button(top, text="⟲", command=lambda: self._reset_size(name), bg=self.th["bg"], fg=self.th["dim"],
+                  relief="flat", bd=0, padx=3, pady=0, font=(FONT, 8), activebackground=self.th["accent"],
+                  cursor="hand2").place(relx=1, x=-2, y=1, anchor="ne")
         if name == "graph":
             cv.bind("<Motion>", lambda e: self._hover_at(e.x))
             cv.bind("<Leave>", lambda e: self._hover_at(None))
         self._title()
         self._apply_topmost()
+
+    def _reset_size(self, name=None):
+        """Back to the size the window had at the very first start; the place stays."""
+        if name:
+            self.panels[name].geometry(PANELS[name][1])
+        else:
+            self.root.state("normal")
+            self.root.geometry(MAIN_SIZE)
 
     def _toggle_panel(self, name):
         if top := self.panels.pop(name, None):
@@ -412,11 +500,23 @@ class App:
         else:
             self._open_panel(name)
 
+    def _on_focus(self, e):
+        try:
+            top = e.widget.winfo_toplevel()
+        except (AttributeError, tk.TclError):  # e.g. a combobox popdown tkinter does not know
+            return
+        if top is self.root or top in self.panels.values():
+            self._raise_group(top)
+
     def _raise_group(self, clicked):
         """Clicking one window brings the main, cockpit and graph windows of this instance up together."""
         for w in [self.root, *self.panels.values(), clicked]:  # the clicked one last, so it stays in front
             if w.winfo_exists() and w.state() != "iconic":
                 w.lift()
+
+    def _arrow_hover(self, xy):
+        self._main_hover = xy
+        draw(self.canvas, self._ticks(), self.th, xy)
 
     def _hover_at(self, x):
         self._hover = x
@@ -424,13 +524,14 @@ class App:
             draw_graph(self.panel_canvas["graph"], self._ticks(), self.th, x)
 
     def _apply_topmost(self):
-        """Keep the cockpit above the game (works with EVE in window or fixed window mode, not in fullscreen)."""
-        if top := self.panels.get("cockpit"):
-            top.attributes("-topmost", self.cfg.getboolean("general", "always_on_top"))
+        """Keep cockpit and graph above the game (works with EVE in window or fixed window mode, not in fullscreen)."""
+        for name, key in (("cockpit", "always_on_top"), ("graph", "graph_on_top")):
+            if top := self.panels.get(name):
+                top.attributes("-topmost", self.cfg.getboolean("general", key))
 
-    def restart(self, char):
+    def restart(self, char, mode=None):
         """Reopen the window as a fresh program, e.g. after switching between client and server."""
-        self._restart(char, self._save_window())  # same size and place
+        self._restart(char, self._save_window(), mode or self.mode)  # same size and place
         self.root.destroy()
 
     def _close(self):
@@ -441,6 +542,27 @@ class App:
         # one entry per character, since several client instances run side by side
         return "server" if self.mode == "server" else char or "client"
 
+    def _on_move(self, e):
+        """A window let go near another one docks to it (moves only, resizing never snaps)."""
+        top = e.widget
+        if top is not self.root and top not in self.panels.values():
+            return
+        if self._sizes.get(top) != (size := (e.width, e.height)):
+            self._sizes[top] = size
+            return
+        if job := self._snap_jobs.pop(top, None):
+            self.root.after_cancel(job)
+        self._snap_jobs[top] = self.root.after(250, lambda: self._snap(top))
+
+    def _snap(self, top):
+        self._snap_jobs.pop(top, None)
+        if not top.winfo_exists() or top.state() != "normal":
+            return
+        if (off := snap.offset(int(top.wm_frame(), 16))) is None:  # mouse still held: ask again shortly
+            self._snap_jobs[top] = self.root.after(150, lambda: self._snap(top))
+        elif off != (0, 0) and (m := re.search(r"\+(-?\d+)\+(-?\d+)$", top.geometry())):
+            top.geometry(f"+{int(m.group(1)) + off[0]}+{int(m.group(2)) + off[1]}")
+
     def _track_place(self, event):
         if event.widget is self.root and self.root.state() == "normal":
             self._normal_geo = self.root.geometry()
@@ -449,13 +571,29 @@ class App:
         state = self.root.state()
         normal = self.root.geometry() if state == "normal" else self._normal_geo or ""
         geometry = f"zoomed {normal}".strip() if state == "zoomed" else normal
-        key = self._window_key(self._char())
+        key = self._layout_key  # the character the windows belong to, also right after picking another one
         try:
             update_config(self.cfg_path, {"windows": {key: geometry, **{
-                f"{key}.{name}": self.panels[name].geometry() if name in self.panels else "off" for name in PANELS}}})
+                f"{key}.{name}": self.panels[name].geometry() if name in self.panels
+                else f"off {self._panel_geo.get(name, '')}".strip() for name in PANELS}}})
         except OSError:
             pass  # a read-only folder must not keep the window from closing
         return geometry
+
+    def _paste_code(self):
+        """Take the server's connection code "host:port/token" from the clipboard and reconnect with it."""
+        try:
+            text = self.root.clipboard_get().strip()
+        except tk.TclError:
+            text = ""
+        m = re.fullmatch(r"(.+):(\d+)/(\S+)", text)
+        if not m or not 0 < int(m.group(2)) < 65536:
+            messagebox.showerror("Paste code", "The clipboard holds no connection code.\n"
+                                 "Copy it on the server (address:port/token) first.", parent=self.root)
+            return
+        host, port, token = m.groups()
+        update_config(self.cfg_path, {"client": {"host": host}, "general": {"port": port, "token": token}})
+        self.restart(self.char.get())
 
     def _copy(self, text):
         self.root.clipboard_clear()
@@ -470,7 +608,7 @@ class App:
 
     def redraw(self):
         ticks = self._ticks()
-        draw(self.canvas, ticks, self.th)
+        draw(self.canvas, ticks, self.th, self._main_hover)
         for name, cv in self.panel_canvas.items():
             if name == "graph":
                 draw_graph(cv, ticks, self.th, self._hover)
@@ -512,8 +650,16 @@ class App:
         self.root.after(100, self._drain)
 
     def _set_char(self):
+        char = self.char.get()
+        if snap.char_open(char, int(self.root.wm_frame(), 16)):
+            # one instance per character: a second one would sit on the first one's places and overwrite them
+            self.char.set(self.backend.char or "")
+            self.status.set(f"{char} is already open in another window")
+            return
+        self._save_window()  # keep the places of the character we leave
         self.call(self.backend.set_char, self.char.get())
         self._title()
+        self._restore_layout()
 
     def _toggle(self):
         self.enabled = not self.enabled
@@ -657,6 +803,7 @@ class App:
         fields = [("Mode", "general", "mode"), ("Server address or connection code", "client", "host"),
                   ("Port", "general", "port"), ("Token", "general", "token"), ("Fight ends after idle seconds", "general", "idle_end"),
                   ("Cockpit always on top (over EVE in window mode)", "general", "always_on_top"),
+                  ("Graph always on top (over EVE in window mode)", "general", "graph_on_top"),
                   ("Show friendly fire (when connected, the server's setting counts)", "general", "friendly_fire"),
                   ("Check for updates at start", "update", "check"),
                   ("Log folder", "client", "log_dir")]  # log folder last: the browse button sits in its row
@@ -664,16 +811,16 @@ class App:
         for row, (label, sec, key) in enumerate(fields):
             tk.Label(top, text=label, bg=self.th["bg"], fg=self.th["fg"]).grid(row=row, column=0, sticky="w",
                                                                               padx=10, pady=4)
-            var = values[(sec, key)] = tk.StringVar(value=self.cfg[sec][key])
+            # the mode belongs to this start, not to the shared config
+            var = values[(sec, key)] = tk.StringVar(value=self.mode if key == "mode" else self.cfg[sec][key])
             if key == "mode":
                 ttk.Combobox(top, textvariable=var, values=["client", "server"], state="readonly", width=12).grid(
                     row=row, column=1, sticky="w", padx=10)
-            elif key in ("always_on_top", "friendly_fire", "check"):
+            elif key in ("always_on_top", "graph_on_top", "friendly_fire", "check"):
                 var.set("yes" if self.cfg.getboolean(sec, key) else "no")
-                # light box with a dark tick: a dark box vanishes on the dark background
-                tk.Checkbutton(top, variable=var, onvalue="yes", offvalue="no", bg=self.th["bg"],
-                               activebackground=self.th["bg"], selectcolor=self.th["fg"], fg=self.th["bg"],
-                               activeforeground=self.th["bg"]).grid(
+                # native ttk box (white with a dark tick): tk.Checkbutton draws the tick in system colours
+                ttk.Style(top).configure("Dark.TCheckbutton", background=self.th["bg"])
+                ttk.Checkbutton(top, variable=var, onvalue="yes", offvalue="no", style="Dark.TCheckbutton").grid(
                     row=row, column=1, sticky="w", padx=6)
             else:
                 tk.Entry(top, textvariable=var, width=50).grid(row=row, column=1, padx=10)
@@ -694,6 +841,7 @@ class App:
             if not idle.isdigit() or not 5 <= int(idle) <= 3600:
                 messagebox.showerror("Settings", "Idle seconds must be a number from 5 to 3600.", parent=top)
                 return
+            mode = values.pop(("general", "mode")).get()
             changed = {k for k, var in values.items() if self.cfg[k[0]][k[1]] != var.get().strip()}
             new = {}
             for sec, key in changed:
@@ -702,16 +850,18 @@ class App:
             top.destroy()
             self._apply_topmost()
             # the rest is read live; a server keeps its running fight unless mode or port change
-            reload = {("general", "mode"), ("general", "port")}
+            reload = {("general", "port")}
             if self.mode == "client":
                 reload |= {("client", "host"), ("general", "token")}
-            if changed & reload:
-                self.restart(self.char.get() if self.mode == "client" else None)
+            if changed & reload or mode != self.mode:
+                self.restart(self.char.get() if self.mode == "client" else None, mode)
             else:
                 self.status.set("settings saved")
         self._button(top, "Check for updates", lambda: self._check_update(manual=True)).grid(
             row=len(fields), column=0, sticky="w", padx=10, pady=10)
         self._button(top, "Save", save).grid(row=len(fields), column=1, sticky="e", padx=10, pady=10)
+        x, y = map(int, re.search(r"\+(-?\d+)\+(-?\d+)$", self.root.geometry()).groups())
+        top.geometry(f"+{x + 50}+{y + 50}")  # top left corner 50 px into the main window
 
 
 def _mmss(secs):

@@ -205,10 +205,17 @@ class Client:
     async def _connect(self):
         host, port = self.cfg["client"]["host"], self.cfg.getint("general", "port")
         self.out({"type": "status", "text": f"connecting to {host}:{port} …"})
-        try:
-            reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port, limit=CLIENT_LIMIT), 10)
-        except (OSError, TimeoutError, ValueError) as e:
-            self.out({"type": "status", "text": f"disconnected ({e or 'timeout'}) – retry in 15 s"})
+        # the code holds the server's public address, which the own router often refuses: a server on this PC
+        # is then found on localhost (the token makes sure it is the right one)
+        for h in dict.fromkeys([host, "127.0.0.1"]):
+            try:
+                reader, writer = await asyncio.wait_for(asyncio.open_connection(h, port, limit=CLIENT_LIMIT), 10)
+                host = h
+                break
+            except (OSError, TimeoutError, ValueError) as e:
+                err = e
+        else:
+            self.out({"type": "status", "text": f"disconnected ({err or 'timeout'}) – retry in 15 s"})
             return
         writer.write(_line({"type": "hello", "token": self.cfg["general"]["token"]}))
         writer.write(_line({"type": "history"}))

@@ -16,8 +16,8 @@ import update
 
 BASE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 DEFAULTS = {
-    "general": {"mode": "client", "port": "47110", "token": "", "history_dir": "history",
-                "public_address": "", "idle_end": "60", "always_on_top": "no", "friendly_fire": "no"},
+    "general": {"port": "47110", "token": "", "history_dir": "history", "public_address": "", "idle_end": "60",
+                "always_on_top": "no", "graph_on_top": "no", "friendly_fire": "no"},
     "client": {"host": "localhost", "log_dir": "~/Documents/EVE/logs/Gamelogs", "auto_connect": "yes"},
     "update": {"check": "yes"},
 }
@@ -28,6 +28,7 @@ def load_config(path):
     cfg = configparser.ConfigParser(interpolation=None)
     cfg.read_dict(DEFAULTS)
     cfg.read(path, encoding="utf-8-sig")  # tolerate the BOM some Windows editors write
+    cfg.remove_option("general", "mode")  # old configs: the mode is per start (--server), not shared
     if not cfg["general"]["token"]:
         cfg["general"]["token"] = secrets.token_urlsafe(16)  # copy the server's token to every client
     with open(path, "w", encoding="utf-8") as fh:
@@ -35,10 +36,11 @@ def load_config(path):
     return cfg
 
 
-def restart(cfg_path, char, geometry):
-    """Start a fresh copy; the config's mode decides now, so --server is not passed on."""
+def restart(cfg_path, char, geometry, mode):
+    """Start a fresh copy in the given mode."""
     cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, str(Path(__file__).resolve())]
     cmd += ["--config", str(cfg_path), "--geometry", geometry] + (["--char", char] if char else [])
+    cmd += ["--server"] if mode == "server" else []
     # a one-file build must unpack itself anew instead of reusing this instance's folder, which goes away
     subprocess.Popen(cmd, env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
 
@@ -79,7 +81,7 @@ def main():
     if args.reset:
         print(asyncio.run(net.send_reset(cfg)), flush=True)
         return
-    mode = "server" if args.server or args.headless or cfg["general"]["mode"] == "server" else "client"
+    mode = "server" if args.server or args.headless else "client"  # a plain start is always a client
     lower_priority()
 
     # only the server asks for its public address
@@ -100,8 +102,10 @@ def main():
     if mode == "server":
         backend = net.Server(cfg, q.put)
     else:
+        import snap
         chars = logparse.characters(cfg["client"]["log_dir"])
-        backend = net.Client(cfg, logparse.LogWatcher(), q.put, args.char or (chars[0] if chars else None))
+        free = [c for c in chars if not snap.char_open(c)]  # one instance per character: skip those already open
+        backend = net.Client(cfg, logparse.LogWatcher(), q.put, args.char or next(iter(free + chars), None))
     loop = asyncio.new_event_loop()
 
     def run():
@@ -112,7 +116,7 @@ def main():
     threading.Thread(target=run, daemon=True).start()
 
     from ui import App  # only here, so a headless Linux server needs no Tk
-    App(mode, backend, loop, q, cfg, cfg_path, code, lambda char, geo: restart(cfg_path, char, geo),
+    App(mode, backend, loop, q, cfg, cfg_path, code, lambda char, geo, mode: restart(cfg_path, char, geo, mode),
         args.geometry).root.mainloop()
 
 
