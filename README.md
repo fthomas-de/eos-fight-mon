@@ -10,7 +10,8 @@ Live view of the current EVE Online fight. Clients read their gamelogs, the serv
 - Windows reopen on the monitor and at the place they were closed, also when closed maximized or minimized. *Reset size* (main window) and the small ⟲ in the cockpit and graph windows bring a window back to its original size.
 - Docking (Windows): a window let go within 15 px of another eos-fight-mon window (also of other characters) or a screen edge lines up with it.
 - The server window lists every connected client with the character it picked and its address (the headless server prints the list when it changes, and when a fight starts and ends).
-- Updates: on start the exe asks GitHub for a newer release and offers to install it. *Yes* downloads it, checks it against `SHA256SUMS.txt`, replaces the exe and restarts; *No* skips that version (*Settings › Check for updates* asks anyway). Other open windows then offer a restart only. Can be turned off (`[update] check`).
+- Updates: on start the exe asks GitHub for a newer release and offers to install it. *Yes* downloads it, checks it against `SHA256SUMS.txt`, replaces the exe and restarts; *No* skips that version (*Settings › Check for updates* asks anyway). Other open windows then offer a restart only. Shortly after start the status line (headless: the log) says whether this is the newest version and whether the EVE static data the ship icons and drone names come from is still CCP's latest. Both can be turned off (`[update] check`).
+- Client and server tell each other their version: a client connected to a server of another version shows it as a warning, the server's client list names a client's version when it differs.
 - The server works in 2 s ticks and alone decides what a fight is: it starts with the first event and ends after 60 s without one (`idle_end`, adjustable in *Settings*) (or on *Reset* in the server window / `--reset` on the server machine; clients cannot reset). Clients fetch every stored fight of the last 7 days automatically; *Replays* (newest first) plays them with start/stop and a slider.
 - Without a server connection a client shows only its own ship on the left and its enemies on the right; ships that only rep it are hidden (their reps still count in the cockpit). Nothing is stored then.
 - Friendly fire (hostile effects between clients and ships that rep with them) is dropped unless *Show friendly fire* is on. With a server the server's setting counts for everyone.
@@ -97,12 +98,13 @@ For a rented server or any machine without a desktop.
    ```bash
    tail -f server.log
    ```
-5. End the running fight (it is stored), and stop the server:
-   ```bash
-   ./eos-fight-mon --reset
-   ```
+5. Stop the server (a running fight is stored first; Ctrl+C does the same in the foreground):
    ```bash
    pkill -f "eos-fight-mon --headless"
+   ```
+   Only end the running fight and keep the server running:
+   ```bash
+   ./eos-fight-mon --reset
    ```
 6. Upgrade to the latest release (stores a running fight, checks the checksum, restarts the server if it was running; the connection code stays):
    ```bash
@@ -137,7 +139,7 @@ The address in the code is the server's public internet address, asked from api.
 
 The connection is not encrypted; the token keeps strangers out, but anyone who can read the traffic could read fight data and the token.
 
-The tool only reads the gamelogs and only writes next to itself (`config.ini`, `history/`, the exe on update). Network: the server connection, api.ipify.org (server, for its address) and api.github.com/github.com (update check).
+The tool only reads the gamelogs and only writes next to itself (`config.ini`, `history/`, the exe on update). Network: the server connection, api.ipify.org (server, for its address) api.github.com/github.com (update check) and developers.eveonline.com (static data check).
 
 ## config.ini
 
@@ -187,7 +189,7 @@ python main.py
 python -m unittest discover -s tests
 ```
 
-Ship icons: `ship_icons.json` holds every published ship of the EVE SDE with its 32 px icon from CCP's image server. Rebuild it when new ships come out (downloads the SDE, about 100 MB):
+Ship icons and drones: `ship_icons.json` holds every published ship of the EVE SDE with its 32 px icon from CCP's image server, `drones.py` every drone and fighter type name. Rebuild both when new ships or drones come out (downloads the SDE, about 100 MB):
 
 ```bash
 python tools/build_icons.py

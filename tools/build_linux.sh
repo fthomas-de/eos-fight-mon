@@ -1,5 +1,5 @@
 #!/bin/bash
-# Linux build (headless server) with a portable Python, so the binary runs on glibc 2.17+.
+# Linux build (client with window and headless server) with a portable Python, so the binary runs on glibc 2.17+.
 # Run from WSL or Linux:  bash tools/build_linux.sh   -> dist/eos-fight-mon-linux
 # Then smoke-tests it: start headless, send one event, --reset must store the fight.
 set -e
@@ -12,9 +12,10 @@ if [ ! -x venv313/bin/python ]; then
     ./venv/bin/uv venv -q --python 3.13 venv313
     ./venv/bin/uv pip install -q --python venv313/bin/python pyinstaller
 fi
-cp "$REPO"/*.py .
+cp "$REPO"/*.py "$REPO"/ship_icons.json .
 rm -rf dist build
-venv313/bin/python -m PyInstaller --onefile --name eos-fight-mon --noconfirm --log-level ERROR main.py 2>&1 | grep -v INFO || true
+venv313/bin/python -m PyInstaller --onefile --name eos-fight-mon --noconfirm --log-level ERROR --add-data "ship_icons.json:." main.py 2>&1 | grep -v INFO || true
+venv313/bin/pyi-archive_viewer -l dist/eos-fight-mon | grep -q ship_icons.json || { echo "ship_icons.json missing in the build"; exit 1; }
 
 T=$(mktemp -d)
 cp dist/eos-fight-mon "$T/"

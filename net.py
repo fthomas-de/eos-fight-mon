@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from fight import (HISTORY_NAME, IDLE_END, TICK, Fight, history_secs, list_history, load_history, save_history,
                    to_event)
+from update import VERSION
 
 CLIENT_LIMIT = 64 * 2**20  # a whole fight comes in one line when replays sync
 SERVER_LIMIT = 2**20
@@ -94,6 +95,7 @@ class Server:
         self.cfg, self.out = cfg, out  # out(msg) feeds the local window
         self.fight = Fight(cfg["general"]["history_dir"])
         self.clients = {}  # writer -> characters of that client
+        self.versions = {}  # writer -> program version of that client
         self._shown = None  # client list last sent to the window
 
     async def run(self):
@@ -131,9 +133,13 @@ class Server:
         self.out({"type": "session", "ticks": load_history(self.fight.history_dir, name)})
 
     def connections(self):
-        """[address, characters] of every connected client, sorted by character."""
-        return sorted(([w.get_extra_info("peername")[0].removeprefix("::ffff:"), sorted(chars)] for w, chars in self.clients.items()),
-                      key=lambda c: (c[1] or ["~"], c[0]))
+        """[address, characters, version note] of every connected client, sorted by character.
+        The note names a client version that differs from the server's, else it is empty."""
+        def note(w):
+            v = self.versions.get(w)
+            return "" if v == VERSION else f"v{v}" if v else "version before 0.6.5"
+        return sorted(([w.get_extra_info("peername")[0].removeprefix("::ffff:"), sorted(chars), note(w)]
+                       for w, chars in self.clients.items()), key=lambda c: (c[1] or ["~"], c[0]))
 
     def _report_clients(self):
         if (now := self.connections()) != self._shown:
@@ -156,6 +162,8 @@ class Server:
             if not hmac.compare_digest(str(hello.get("token", "")).encode(), token):
                 writer.write(_line({"type": "denied"}))
                 return
+            self.versions[writer] = str(hello.get("version", ""))[:20]
+            writer.write(_line({"type": "version", "version": VERSION}))  # older clients ignore it
             for tick in self.fight.ticks:  # late joiners get the running fight from its start
                 writer.write(_line({"type": "tick", **tick}))
             self.clients[writer] = set()
@@ -177,6 +185,7 @@ class Server:
             pass  # broken or hostile client: just drop it
         finally:
             self.clients.pop(writer, None)
+            self.versions.pop(writer, None)
             writer.close()
 
 
@@ -187,6 +196,7 @@ class Client:
         self.fight = Fight(solo=True)  # live view while not connected; the server alone decides what a fight is
         self.enabled = cfg.getboolean("client", "auto_connect")
         self.writer = None
+        self.mismatch = ""  # warning while connected to a server with another version
         self.wake = asyncio.Event()
 
     async def run(self):
@@ -219,7 +229,7 @@ class Client:
         else:
             self.out({"type": "status", "text": f"disconnected ({err or 'timeout'}) – retry in 15 s"})
             return
-        writer.write(_line({"type": "hello", "token": self.cfg["general"]["token"]}))
+        writer.write(_line({"type": "hello", "token": self.cfg["general"]["token"], "version": VERSION}))
         writer.write(_line({"type": "history"}))
         self.fight.end()
         self.writer = writer
@@ -233,7 +243,10 @@ class Client:
                 if kind == "denied":
                     text = "token rejected – check the connection code in the settings"
                     break
-                if kind == "history":  # fetch the recent fights we do not have yet
+                if kind == "version":
+                    if msg["version"] != VERSION:
+                        self.mismatch = f"server runs v{msg['version']}, this is v{VERSION}"
+                elif kind == "history":  # fetch the recent fights we do not have yet
                     have = set(list_history(self.history_dir))
                     since = (datetime.now(timezone.utc) - timedelta(days=SYNC_DAYS)).strftime("%Y%m%d_%H%M%S")
                     for name in msg["sessions"]:
@@ -250,6 +263,7 @@ class Client:
             pass
         finally:
             self.writer = None
+            self.mismatch = ""
             writer.close()
         self.out({"type": "reset"})
         self.out({"type": "status", "text": text})
@@ -260,7 +274,7 @@ class Client:
             await asyncio.sleep(TICK)
             char = self.char
             events = await asyncio.to_thread(self.watcher.poll, self.cfg["client"]["log_dir"], char)
-            self.out({"type": "warning", "text": _warning(char, self.watcher)})
+            self.out({"type": "warning", "text": _warning(char, self.watcher) or self.mismatch})
             if self.writer:
                 self.writer.write(_line({"type": "events", "listeners": [char] if char else [], "events": events}))
                 continue

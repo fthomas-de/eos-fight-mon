@@ -46,7 +46,11 @@ SCRAM = P + ("<color=0xffffffff><b>Warp scramble attempt</b> <color=0x77ffffff><
 JAM = P + ("<color=0x77ffffff><font size=10>You're</font> <color=0xffffffff><b>jammed</b> <color=0x77ffffff>"
            "<font size=10>by</font> <color=0xffffffff><b><font size=12><color=0xFF40FFFF><b>Rook</b> </color>"
            "</font></b><color=0x77ffffff><font size=10> - Umbra Scoped Radar ECM</font>")
-MISS = P + "Your Republic Fleet Warrior misses Foe Two completely - Republic Fleet Warrior"
+JAM_DRONE = P + ("<color=0x77ffffff><font size=10>You're</font> <color=0xffffffff><b>jammed</b> <color=0x77ffffff>"
+                 "<font size=10>by</font> <color=0xffffffff><b><font size=11><color=0xFF40FF40><b>Hornet EC-300</b>"
+                 "</color></font> <font size=12>Hornet EC-300</font></b><color=0x77ffffff><font size=10> - "
+                 "Hornet EC-300</font>")
+MISS = P +"Your Republic Fleet Warrior misses Foe Two completely - Republic Fleet Warrior"
 NOTIFY = "[ 2026.10.12 18:15:00 ] (notify) Ship stopping"
 
 
@@ -69,6 +73,7 @@ class ParseTest(unittest.TestCase):
             POINT_YOU: Event("point", "Collapsing Forager", None, ME, None, 1, None, ME),
             SCRAM: Event("scram", "Foe One", "Myrmidon", "Friend One", "Flycatcher", 1, None, ME),
             JAM: Event("jam", "Rook", None, ME, None, 1, "Umbra Scoped Radar ECM", ME),
+            JAM_DRONE: Event("jam", "Hornet EC-300", None, ME, None, 1, "Hornet EC-300", ME),
             MISS: None,
             NOTIFY: None,
         }

@@ -24,7 +24,7 @@ chmod +x eos-fight-mon.new
 running=no
 if pgrep -f "eos-fight-mon --headless" >/dev/null; then
     running=yes
-    ./eos-fight-mon --reset || true  # store the running fight
+    ./eos-fight-mon --reset || true  # store the running fight (versions before 0.6.5 lose it on kill)
     pkill -f "eos-fight-mon --headless"
     sleep 2
 fi

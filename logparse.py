@@ -27,6 +27,7 @@ _POINT = re.compile(r"disruption|perturbation|Stör|妨害|디스럽트|пода
 _YOU = {"you", "vous", "sie", "ihnen", "あなた", "당신", "вы", "ti", "tu parte", "你"}
 # the 'label' stands after the ship in newer logs, before it in older ones
 _PARTY = re.compile(r"(.+?)\s*\[[^\]]*\](?:<[^>]*>)?\s*(?:'[^']*')?\s*\((.+?)\)(?:'.*')?")
+_DOUBLED = re.compile(r"(.+) \1")
 # header line 3 is "Listener: name" in the client's language; a log without character has the start time there
 _LISTENER = re.compile(rb"\A-+\r?\n[^\n]*\n[^\n:]*: (.+?)\r?\n")
 _STARTED = re.compile(rb"\d{4}\.\d\d\.\d\d \d\d:\d\d:\d\d")
@@ -37,8 +38,10 @@ def party(text, logger):
     text = text.replace("\x01", "").replace("\x02", "").strip(" ,.!！")
     if text.lower() in _YOU:
         return logger, None
-    m = _PARTY.fullmatch(text)
-    return (m[1], m[2]) if m else (text, None)
+    if m := _PARTY.fullmatch(text):
+        return m[1], m[2]
+    d = _DOUBLED.fullmatch(text)  # a drone in space: its name, then its type, both the same
+    return (d[1] if d else text), None
 
 
 def _pieces(body):

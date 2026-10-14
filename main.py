@@ -5,6 +5,7 @@ import configparser
 import os
 import queue
 import secrets
+import signal
 import subprocess
 import sys
 import threading
@@ -53,7 +54,8 @@ def printer():
     def out(msg):
         kind, clock = msg.get("type"), time.strftime("%H:%M:%S")
         if kind == "clients":
-            names = [f"{', '.join(chars) or 'no character'} ({addr})" for addr, chars in msg["list"]]
+            names = [f"{', '.join(chars) or 'no character'} ({', '.join(filter(None, (addr, ver)))})"
+                     for addr, chars, ver in msg["list"]]
             print(f"{clock} {len(names)} connected: {'; '.join(names) or '-'}", flush=True)
         elif kind == "tick":
             if not fight:
@@ -104,14 +106,31 @@ def main():
     code = mode == "server" and f"{net.public_address(cfg)}:{cfg['general']['port']}/{cfg['general']['token']}"
 
     if args.headless:
-        print(f"eos-fight-mon server running. Connection code for clients: {code}", flush=True)
+        print(f"eos-fight-mon v{update.VERSION} server running. Connection code for clients: {code}", flush=True)
         if cfg.getboolean("update", "check"):
-            try:
-                if found := update.latest():
-                    print(f"{found[0]} is available: https://github.com/{update.REPO}/releases/latest", flush=True)
-            except (OSError, ValueError, KeyError):
-                pass
-        asyncio.run(net.Server(cfg, printer()).run())
+            def check():  # CCP may need several handshakes: do not hold up the server start
+                try:
+                    found = update.latest()
+                    print(f"{time.strftime('%H:%M:%S')} " + (
+                        f"{found[0]} is available: https://github.com/{update.REPO}/releases/latest" if found
+                        else f"v{update.VERSION} is the newest version"), flush=True)
+                except (OSError, ValueError, KeyError):
+                    pass
+                try:
+                    print(f"{time.strftime('%H:%M:%S')} {update.sde_status()}", flush=True)
+                except (OSError, ValueError, KeyError):
+                    pass
+            threading.Thread(target=check, daemon=True).start()
+        server = net.Server(cfg, printer())
+
+        def stop(*_):  # Ctrl+C or kill: store the running fight, then exit without waiting for the clients
+            server.fight.end()
+            server.out({"type": "reset"})
+            print(f"{time.strftime('%H:%M:%S')} server stopped", flush=True)
+            os._exit(0)
+        signal.signal(signal.SIGINT, stop)
+        signal.signal(signal.SIGTERM, stop)
+        asyncio.run(server.run())
         return
 
     q = queue.Queue()

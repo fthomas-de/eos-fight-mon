@@ -6,6 +6,7 @@ import re
 import time
 from pathlib import Path
 
+from drones import DRONE_TYPES
 from logparse import KINDS, Event
 
 TICK = 2  # seconds
@@ -15,17 +16,10 @@ EWAR = {"scram", "point", "jam"}
 REPS = {"shield", "armor", "hull", "cap"}
 DRONES = "Drones (owner unknown)"
 HISTORY_NAME = re.compile(r"\d{8}_\d{6}\.jsonl\.gz")  # fight start in UTC, so names sort by date and time
-# shortcut: drones are recognised by one word of their type name; add a word when a drone shows up as a ship
-_DRONE_WORDS = {
-    "Acolyte", "Infiltrator", "Praetor", "Curator", "Hobgoblin", "Hammerhead", "Ogre", "Garde",
-    "Warrior", "Valkyrie", "Berserker", "Bouncer", "Hornet", "Vespa", "Wasp", "Warden", "Gecko",
-    "Bot", "Dragonfly", "Firbolg", "Einherji", "Templar", "Cyclops", "Malleus", "Tyrfing", "Mantis",
-    "Gram", "Locust", "Satyr", "Siren", "Dromi", "Equite", "Termite", "Ametat", "Antero",
-}
 
 
 def is_drone(name):
-    return bool(name) and not _DRONE_WORDS.isdisjoint(name.split())
+    return name in DRONE_TYPES
 
 
 class Fight:

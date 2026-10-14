@@ -45,8 +45,9 @@ Read the last lines. On failure: stop, show it, do not weaken tests.
 
 ## 2 · Build
 
-1. Ship icons only when new ships came out (`python tools/build_icons.py`,
-   ~100 MB download) - ask, normally skip.
+1. `python tools/build_icons.py --check` compares the SDE build of `ship_icons.json` / `drones.py`
+   with CCP's latest. Exit 1 (outdated): run `python tools/build_icons.py` (~100 MB download) and
+   commit both files with the release.
 2. Windows: if `dist\eos-fight-mon.exe` exists, **rename** it to
    `dist\eos-fight-mon-<its version>-prev.exe` (it may be running; renaming
    works, deleting does not; if that name is taken, add `-2`, `-3`, … -

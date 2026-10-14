@@ -441,8 +441,8 @@ class App:
         self.canvas.bind("<Button-1>", lambda e: self._toggle_legend(e.x, e.y))
         self._restore_layout(main=not geometry, first=True)
         root.after(100, self._drain)
-        if update.can_install() and cfg.getboolean("update", "check"):
-            root.after(3000, lambda: self._check_update(manual=False))
+        if cfg.getboolean("update", "check"):
+            root.after(5000, self._check_online)  # after the first connection messages
 
     def _button(self, parent, text, cmd):
         th = self.th
@@ -697,7 +697,8 @@ class App:
                 elif kind == "session":
                     self._start_replay(msg["ticks"])
                 elif kind == "clients":
-                    names = [f"{', '.join(chars) or 'no character yet'} ({addr})" for addr, chars in msg["list"]]
+                    names = [f"{', '.join(chars) or 'no character yet'} ({', '.join(filter(None, (addr, ver)))})"
+                             for addr, chars, ver in msg["list"]]
                     self.clients.set(f"{len(names)} connected:   " + "   ·   ".join(names) if names
                                      else "no client connected")
                 elif kind == "update":
@@ -807,6 +808,25 @@ class App:
         self.redraw()
 
     # --- update ---
+
+    def _check_online(self):
+        """Once after start: newest release (offered for install) and SDE, as one line in the status bar."""
+        def run():
+            parts = []
+            try:
+                found = update.latest()
+                parts.append(f"{found[0]} available" if found else f"v{update.VERSION} is the newest")
+                if found and update.can_install():
+                    self.q.put({"type": "update", "tag": found[0], "assets": found[1], "manual": False})
+            except (OSError, ValueError, KeyError):
+                pass  # GitHub or CCP unreachable: leave that part out
+            try:
+                parts.append(update.sde_status())
+            except (OSError, ValueError, KeyError):
+                pass
+            if parts:
+                self.q.put({"type": "status", "text": "  ·  ".join(parts)})
+        threading.Thread(target=run, daemon=True).start()
 
     def _check_update(self, manual):
         """Ask GitHub in the background; the answer comes back through the queue."""

@@ -7,7 +7,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.6.4"
+VERSION = "0.6.5"
 REPO = "fthomas-de/eos-fight-mon"
 SUFFIX = "-windows-x64.exe" if sys.platform == "win32" else "-linux-x86_64"  # release asset of this platform
 
@@ -34,6 +34,22 @@ def latest():
     if _key(tag) <= _key(VERSION):
         return None
     return tag, {a["name"]: a["browser_download_url"] for a in rel["assets"]}
+
+
+def sde_status():
+    """Short line: is the SDE that ship icons and drone names were built from still CCP's latest?"""
+    from drones import SDE_BUILD
+    for attempt in range(3):  # CCP's servers drop the odd handshake
+        try:
+            with _get("https://developers.eveonline.com/static-data/tranquility/latest.jsonl") as r:
+                latest = json.loads(r.readline())["buildNumber"]
+            break
+        except OSError:
+            if attempt == 2:
+                raise
+    if latest == SDE_BUILD:
+        return f"SDE {SDE_BUILD} is current"
+    return f"SDE {SDE_BUILD} outdated (CCP: {latest}): newest ships and drones unknown"
 
 
 def install(assets, exe=None):
