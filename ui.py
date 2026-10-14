@@ -300,6 +300,7 @@ class App:
             root.state("zoomed")
         root.bind("<Configure>", self._track_place, add="+")
         root.protocol("WM_DELETE_WINDOW", self._close)
+        root.bind("<FocusIn>", lambda e: self._raise_group(root) if e.widget is root else None, add="+")
         root.configure(bg=th["bg"])
 
         self.bar = tk.Frame(root, bg=th["panel"])
@@ -393,6 +394,7 @@ class App:
         if sys.platform == "win32":
             top.attributes("-toolwindow", True)  # thin title bar
         top.protocol("WM_DELETE_WINDOW", lambda: self._toggle_panel(name))
+        top.bind("<FocusIn>", lambda e: self._raise_group(top) if e.widget is top else None)
         cv = self.panel_canvas[name] = tk.Canvas(top, bg=self.th["bg"], highlightthickness=0)
         cv.pack(fill="both", expand=True)
         cv.bind("<Configure>", lambda e: self.redraw())
@@ -409,6 +411,12 @@ class App:
             top.destroy()
         else:
             self._open_panel(name)
+
+    def _raise_group(self, clicked):
+        """Clicking one window brings the main, cockpit and graph windows of this instance up together."""
+        for w in [self.root, *self.panels.values(), clicked]:  # the clicked one last, so it stays in front
+            if w.winfo_exists() and w.state() != "iconic":
+                w.lift()
 
     def _hover_at(self, x):
         self._hover = x
@@ -640,7 +648,12 @@ class App:
         return top
 
     def _settings(self):
-        top = self._dialog("Settings")
+        if (top := getattr(self, "_settings_top", None)) and top.winfo_exists():  # one settings dialog per window
+            top.deiconify()
+            top.lift()
+            top.focus_force()
+            return
+        top = self._settings_top = self._dialog("Settings")
         fields = [("Mode", "general", "mode"), ("Server address or connection code", "client", "host"),
                   ("Port", "general", "port"), ("Token", "general", "token"), ("Fight ends after idle seconds", "general", "idle_end"),
                   ("Cockpit always on top (over EVE in window mode)", "general", "always_on_top"),
@@ -657,8 +670,10 @@ class App:
                     row=row, column=1, sticky="w", padx=10)
             elif key in ("always_on_top", "friendly_fire", "check"):
                 var.set("yes" if self.cfg.getboolean(sec, key) else "no")
+                # light box with a dark tick: a dark box vanishes on the dark background
                 tk.Checkbutton(top, variable=var, onvalue="yes", offvalue="no", bg=self.th["bg"],
-                               activebackground=self.th["bg"], selectcolor=self.th["panel"]).grid(
+                               activebackground=self.th["bg"], selectcolor=self.th["fg"], fg=self.th["bg"],
+                               activeforeground=self.th["bg"]).grid(
                     row=row, column=1, sticky="w", padx=6)
             else:
                 tk.Entry(top, textvariable=var, width=50).grid(row=row, column=1, padx=10)

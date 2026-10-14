@@ -7,7 +7,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 REPO = "fthomas-de/eos-fight-mon"
 SUFFIX = "-windows-x64.exe" if sys.platform == "win32" else "-linux-x86_64"  # release asset of this platform
 
