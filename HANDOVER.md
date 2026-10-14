@@ -1,10 +1,10 @@
 # Handover
 
-State on 2026-10-13. Read this, `README.md` and `PLAN.md` before continuing.
+State on 2026-10-14. Read this, `README.md` and `PLAN.md` before continuing.
 
 ## Where things stand
 
-- Latest release: **v0.6.0** (https://github.com/fthomas-de/eos-fight-mon/releases/tag/v0.6.0), Windows exe + Linux binary + SHA256SUMS. `main` is pushed.
+- Latest release: **v0.6.1** (https://github.com/fthomas-de/eos-fight-mon/releases/tag/v0.6.1), Windows exe + Linux binary + SHA256SUMS. `main` is pushed.
 - unit tests green: `python -m unittest discover -s tests`
 - Python 3.13, standard library only. Build-time tools: PyInstaller (Windows), WSL Ubuntu + `uv` (Linux).
 
@@ -38,7 +38,7 @@ wsl.exe -d Ubuntu -- bash /mnt/c/Users/floth/Documents/eos-fight-mon/tools/build
 
 Before building: bump `VERSION` in `update.py`. The self-update finds the asset by its suffix `-windows-x64.exe` / `-linux-x86_64` and needs `SHA256SUMS.txt` (format `hash *name`) in the release, so keep those names.
 
-Release: copy both binaries renamed `eos-fight-mon-vX.Y.Z-windows-x64.exe` / `-linux-x86_64` into a folder, write `SHA256SUMS.txt` and `RELEASE_NOTES.md` (previous notes: `gh release view v0.6.0`), tag, push, then
+Release: copy both binaries renamed `eos-fight-mon-vX.Y.Z-windows-x64.exe` / `-linux-x86_64` into a folder, write `SHA256SUMS.txt` and `RELEASE_NOTES.md` (previous notes: `gh release view v0.6.1`), tag, push, then
 `"C:\Program Files\GitHub CLI\gh.exe" release create vX.Y.Z --repo fthomas-de/eos-fight-mon --title ... --notes-file ... <files>`
 and re-download to compare checksums. `gh` is logged in as `fthomas-de` but not on PATH in older terminals.
 
@@ -55,7 +55,7 @@ and re-download to compare checksums. `gh` is logged in as `fthomas-de` but not 
 ## Open
 
 - **Other EVE client languages**: only English logs are parsed; the client warns otherwise. Needs real sample gamelogs per language (damage both ways, remote reps given/received, neut/nos, scram/point/jam). The SDE has ship names in all languages (`name.de`, `name.ru`, …), useful for icons/ship names then.
-- Never tested: the cockpit and graph windows (looks, hover) and always on top over a running EVE, a maximized window reopening on a second monitor, a real self-update v0.5.0 → next version, a client connecting over the internet, a real 10-man fight, the v0.4.0 Windows exe started by hand (icons only checked on an invisible canvas and in the archive), clicking through the settings dialog, the Linux binary on an old distribution.
+- Never tested: windows of one instance raising together on click (v0.6.1, `_raise_group`), the cockpit and graph windows (looks, hover) and always on top over a running EVE, a maximized window reopening on a second monitor, a real self-update v0.5.0 → next version, a client connecting over the internet, a real 10-man fight, the v0.4.0 Windows exe started by hand (icons only checked on an invisible canvas and in the archive), clicking through the settings dialog, the Linux binary on an old distribution.
 - No systemd unit for the headless server (user did not ask).
 - Possible: show the drone-name list gaps (`fight._DRONE_WORDS`) when new drones appear.
 
