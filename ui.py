@@ -739,6 +739,7 @@ class App:
         if (top := getattr(self, "_replays_top", None)) and top.winfo_exists():  # one replay list per window
             for w in top.winfo_children():  # fill it again with the fresh list
                 w.destroy()
+            self._place_dialog(top)  # the main window may have moved since
             top.deiconify()
             top.lift()
             top.focus_force()
@@ -881,12 +882,17 @@ class App:
         top = tk.Toplevel(self.root, bg=self.th["bg"])
         top.title(title)
         top.transient(self.root)
-        x, y = map(int, re.search(r"\+(-?\d+)\+(-?\d+)$", self.root.geometry()).groups())
-        top.geometry(f"+{x + 50}+{y + 50}")  # top left corner 50 px into the main window
+        self._place_dialog(top)
         return top
+
+    def _place_dialog(self, top):
+        # top left corner 50 px into the main window; root.geometry() holds the normal place even when
+        # the window is maximized (maybe on another monitor), winfo_root* is where it really is
+        top.geometry(f"+{self.root.winfo_rootx() + 50}+{self.root.winfo_rooty() + 50}")
 
     def _settings(self):
         if (top := getattr(self, "_settings_top", None)) and top.winfo_exists():  # one settings dialog per window
+            self._place_dialog(top)  # the main window may have moved since
             top.deiconify()
             top.lift()
             top.focus_force()
