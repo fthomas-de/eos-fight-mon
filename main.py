@@ -8,6 +8,7 @@ import secrets
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import logparse
@@ -45,11 +46,26 @@ def restart(cfg_path, char, geometry, mode):
     subprocess.Popen(cmd, env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
 
 
-def print_clients(msg):
-    """Headless server: the connections are the only thing worth printing."""
-    if msg.get("type") == "clients":
-        names = [f"{', '.join(chars) or 'no character'} ({addr})" for addr, chars in msg["list"]]
-        print(f"{len(names)} connected: {'; '.join(names) or '-'}", flush=True)
+def printer():
+    """Headless server output: connections, and start and end of each fight."""
+    fight = {}  # start and last active tick of the running fight (the idle tail before its end is not stored)
+
+    def out(msg):
+        kind, clock = msg.get("type"), time.strftime("%H:%M:%S")
+        if kind == "clients":
+            names = [f"{', '.join(chars) or 'no character'} ({addr})" for addr, chars in msg["list"]]
+            print(f"{clock} {len(names)} connected: {'; '.join(names) or '-'}", flush=True)
+        elif kind == "tick":
+            if not fight:
+                print(f"{clock} fight started", flush=True)
+                fight.update(start=msg["start"], t=msg["t"])
+            if msg["flows"]:
+                fight["t"] = msg["t"]
+        elif kind == "reset" and fight:  # idle end, or --reset
+            secs = int(fight["t"] - fight["start"]) + 2
+            print(f"{clock} fight ended after {secs // 60}:{secs % 60:02d} min, stored", flush=True)
+            fight.clear()
+    return out
 
 
 def lower_priority():
@@ -95,7 +111,7 @@ def main():
                     print(f"{found[0]} is available: https://github.com/{update.REPO}/releases/latest", flush=True)
             except (OSError, ValueError, KeyError):
                 pass
-        asyncio.run(net.Server(cfg, print_clients).run())
+        asyncio.run(net.Server(cfg, printer()).run())
         return
 
     q = queue.Queue()

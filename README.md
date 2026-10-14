@@ -9,7 +9,7 @@ Live view of the current EVE Online fight. Clients read their gamelogs, the serv
 - *Cockpit always on top* and *Graph always on top* in *Settings* keep those windows above the game. That works with EVE in window or fixed window mode, not in exclusive fullscreen.
 - Windows reopen on the monitor and at the place they were closed, also when closed maximized or minimized. *Reset size* (main window) and the small ⟲ in the cockpit and graph windows bring a window back to its original size.
 - Docking (Windows): a window let go within 15 px of another eos-fight-mon window (also of other characters) or a screen edge lines up with it.
-- The server window lists every connected client with the character it picked and its address (the headless server prints the list when it changes).
+- The server window lists every connected client with the character it picked and its address (the headless server prints the list when it changes, and when a fight starts and ends).
 - Updates: on start the exe asks GitHub for a newer release and offers to install it. *Yes* downloads it, checks it against `SHA256SUMS.txt`, replaces the exe and restarts; *No* skips that version (*Settings › Check for updates* asks anyway). Other open windows then offer a restart only. Can be turned off (`[update] check`).
 - The server works in 2 s ticks and alone decides what a fight is: it starts with the first event and ends after 60 s without one (`idle_end`, adjustable in *Settings*) (or on *Reset* in the server window / `--reset` on the server machine; clients cannot reset). Clients fetch every stored fight of the last 7 days automatically; *Replays* (newest first) plays them with start/stop and a slider.
 - Without a server connection a client shows only its own ship on the left and its enemies on the right; ships that only rep it are hidden (their reps still count in the cockpit). Nothing is stored then.
@@ -17,6 +17,100 @@ Live view of the current EVE Online fight. Clients read their gamelogs, the serv
 - Ship icons (32 px) for every ship type, packed into the exe.
 - Layout is made for teams of about 10.
 - Runs at below-normal priority and only reads the gamelogs (no access to the game), about 5 ms of work every 2 s.
+
+## Quick start
+
+Each setup gets its own folder; `config.ini` and `history/` are created next to the program. Clients need the server's connection code; the server must be reachable on TCP port 47110.
+
+### Windows client
+
+1. Download into a new folder (PowerShell):
+   ```powershell
+   mkdir eos-fight-mon; cd eos-fight-mon
+   ```
+   ```powershell
+   $u = @((irm https://api.github.com/repos/fthomas-de/eos-fight-mon/releases/latest).assets.browser_download_url -like '*windows-x64.exe')[0]; iwr $u -OutFile eos-fight-mon.exe
+   ```
+2. Start:
+   ```powershell
+   .\eos-fight-mon.exe
+   ```
+3. Pick your character top left, copy the server's connection code and press *Paste code*.
+
+### Windows server
+
+1. Download as in *Windows client*, step 1.
+2. Start:
+   ```powershell
+   .\eos-fight-mon.exe --server
+   ```
+3. Allow the Windows firewall prompt. At home, forward TCP port 47110 in the router to this PC.
+4. Press *Copy* and send the connection code to your players.
+
+### Linux client
+
+Needs a desktop (EVE via Steam/Proton).
+
+1. Download into a new folder:
+   ```bash
+   mkdir -p ~/eos-fight-mon && cd ~/eos-fight-mon
+   ```
+   ```bash
+   curl -Lo eos-fight-mon $(curl -s https://api.github.com/repos/fthomas-de/eos-fight-mon/releases/latest | grep -o 'https://[^"]*linux-x86_64' | head -1) && chmod +x eos-fight-mon
+   ```
+2. Start:
+   ```bash
+   ./eos-fight-mon
+   ```
+3. *Settings › Log folder*: EVE's `Gamelogs` folder; with Proton usually `~/.steam/steam/steamapps/compatdata/8500/pfx/drive_c/users/steamuser/Documents/EVE/logs/Gamelogs`.
+4. Pick your character, copy the server's connection code and press *Paste code*.
+
+### Linux server
+
+Needs a desktop.
+
+1. Download as in *Linux client*, step 1.
+2. Open the port:
+   ```bash
+   sudo ufw allow 47110/tcp
+   ```
+3. Start:
+   ```bash
+   ./eos-fight-mon --server
+   ```
+4. Press *Copy* and send the connection code to your players.
+
+### Linux server, headless
+
+For a rented server or any machine without a desktop.
+
+1. Download as in *Linux client*, step 1.
+2. Open the port (on a rented server also in the provider's firewall):
+   ```bash
+   sudo ufw allow 47110/tcp
+   ```
+3. Start in the background:
+   ```bash
+   nohup ./eos-fight-mon --headless > server.log 2>&1 &
+   ```
+4. Read the connection code and send it to your players; the log also shows connections and each fight's start and end:
+   ```bash
+   tail -f server.log
+   ```
+5. End the running fight (it is stored), and stop the server:
+   ```bash
+   ./eos-fight-mon --reset
+   ```
+   ```bash
+   pkill -f "eos-fight-mon --headless"
+   ```
+6. Upgrade to the latest release (stores a running fight, checks the checksum, restarts the server if it was running; the connection code stays):
+   ```bash
+   curl -fsSLO https://raw.githubusercontent.com/fthomas-de/eos-fight-mon/main/tools/upgrade_linux.sh
+   ```
+   ```bash
+   sh upgrade_linux.sh
+   ```
 
 ## Start
 
@@ -105,7 +199,7 @@ Windows build:
 python -m PyInstaller --onefile --windowed --name eos-fight-mon --icon icon.ico --add-data "ship_icons.json;." main.py
 ```
 
-Linux build (headless server only, no Tk). Built on Linux or WSL with a portable Python from `uv`, so the binary runs on any distribution with glibc 2.17 or newer; a distribution's own Python would tie it to that distribution's glibc:
+Linux build (includes Tk: runs headless with `--headless`, or with the window as client or server where a display is available, e.g. WSLg). Built on Linux or WSL with a portable Python from `uv`, so the binary runs on any distribution with glibc 2.17 or newer; a distribution's own Python would tie it to that distribution's glibc:
 
 ```bash
 bash tools/build_linux.sh
@@ -113,7 +207,7 @@ bash tools/build_linux.sh
 
 (sets up the portable Python in `~/efm-build` on first run, builds `dist/eos-fight-mon-linux` and smoke-tests it)
 
-On the server: copy the binary, `chmod +x eos-fight-mon`, start `./eos-fight-mon --headless`; `./eos-fight-mon --reset` ends the running fight.
+Running it: see *Quick start*.
 
 ## Legal
 

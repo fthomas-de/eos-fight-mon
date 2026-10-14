@@ -28,6 +28,8 @@ COLORS = {"dmg": "#e5484d", "shield": "#30a46c", "armor": "#30a46c", "hull": "#3
 OFFSET = {"dmg": -9, "shield": 0, "armor": 0, "hull": 0, "cap": 5, "neut": 9, "nos": 9, "scram": 14, "point": 14, "jam": 14}
 LANE = {k: sorted(set(OFFSET.values())).index(v) for k, v in OFFSET.items()}  # 0 = damage … 4 = scram
 LEGEND = [("Damage", "dmg"), ("Reps", "shield"), ("Cap", "cap"), ("Neut/Nos", "neut"), ("Scram/Point/Jam", "scram")]
+LEGEND_OF = {"dmg": "dmg", "shield": "shield", "armor": "shield", "hull": "shield", "cap": "cap",
+             "neut": "neut", "nos": "neut", "scram": "scram", "point": "scram", "jam": "scram"}  # arrow kind → entry
 GROUPS = [("Damage", "dmg", {"dmg"}), ("Reps", "shield", REPS - {"cap"}), ("Cap", "cap", {"cap"}),
           ("Neut/Nos", "neut", {"neut", "nos"})]
 NAMES = {"dmg": "Damage", "shield": "Shield reps", "armor": "Armor reps", "hull": "Hull reps", "cap": "Cap transfer",
@@ -80,8 +82,9 @@ def _rates(window):
     return rates, ewar
 
 
-def draw(cv, ticks, th, hover=None):
-    """Draw a fight up to its last tick: ships with per-second rates of the last 10 s; hover (x, y) shows the arrows there."""
+def draw(cv, ticks, th, hover=None, off=()):
+    """Draw a fight up to its last tick: ships with per-second rates of the last 10 s; hover (x, y) shows the arrows there.
+    off: legend entries whose arrows are hidden (clicking an entry toggles it)."""
     cv.delete("all")
     w, h = cv.winfo_width(), cv.winfo_height()
     if not ticks:
@@ -115,10 +118,10 @@ def draw(cv, ticks, th, hover=None):
             pos[n] = (x + BOX_W if col == 0 else x, y + (row - 6) / 2, col, x, y)
 
     for (k, s, d), r in rates.items():
-        if item := _arrow(cv, pos, k, s, d, 1 + min(6, math.log10(1 + r))):
+        if LEGEND_OF[k] not in off and (item := _arrow(cv, pos, k, s, d, 1 + min(6, math.log10(1 + r)))):
             tips[item] = f"{NAMES[k]}  {s} → {d}  {fmt(r)}/s"
     for k, s, d in ewar:
-        if item := _arrow(cv, pos, k, s, d, 2, dash=(4, 3)):
+        if LEGEND_OF[k] not in off and (item := _arrow(cv, pos, k, s, d, 2, dash=(4, 3))):
             tips[item] = f"{NAMES[k]}  {s} → {d}"
     for n, (_, _, col, x, y) in pos.items():
         cv.create_rectangle(x, y, x + BOX_W, y + row - 6, fill=th["panel"],
@@ -132,9 +135,14 @@ def draw(cv, ticks, th, hover=None):
         cv.create_text(tx, y + 19, anchor="nw", text=info, fill=th["dim"], font=(FONT, 9))
 
     x = 20
-    for label, kind in LEGEND:
-        cv.create_line(x, h - 14, x + 20, h - 14, fill=COLORS[kind], width=3)
-        x = cv.bbox(cv.create_text(x + 26, h - 14, anchor="w", text=label, fill=th["dim"], font=(FONT, 9)))[2] + 18
+    for label, kind in LEGEND:  # tagged "legend:<kind>" for the click toggle; a hidden entry is grey and struck out
+        tags = ("legend", f"legend:{kind}")
+        hidden = kind in off
+        x2 = cv.bbox(cv.create_text(x + 26, h - 14, anchor="w", text=label, fill=th["dim"], tags=tags,
+                                    font=(FONT, 9, "overstrike") if hidden else (FONT, 9)))[2]
+        cv.tag_lower(cv.create_rectangle(x - 4, h - 24, x2 + 6, h - 4, fill=th["bg"], outline="", tags=tags))  # click area
+        cv.create_line(x, h - 14, x + 20, h - 14, fill=th["dim"] if hidden else COLORS[kind], width=3, tags=tags)
+        x = x2 + 18
 
     if hover and (hits := [i for i in cv.find_overlapping(hover[0] - 4, hover[1] - 4, hover[0] + 4, hover[1] + 4)
                            if i in tips]):
@@ -376,6 +384,7 @@ class App:
             self._conn_text()
         self.panels, self.panel_canvas, self._panel_geo, self._hover = {}, {}, {}, None
         self._main_hover = None
+        self._off = set()  # legend entries whose arrows are hidden
         self._title()
         if mode == "server":  # who is connected, with the character each client picked
             self.clients = tk.StringVar(value="no client connected")
@@ -399,7 +408,7 @@ class App:
         self.canvas.bind("<Configure>", lambda e: self.redraw())
         self.canvas.bind("<Motion>", lambda e: self._arrow_hover((e.x, e.y)))
         self.canvas.bind("<Leave>", lambda e: self._arrow_hover(None))
-
+        self.canvas.bind("<Button-1>", lambda e: self._toggle_legend(e.x, e.y))
         self._restore_layout(main=not geometry, first=True)
         root.after(100, self._drain)
         if update.can_install() and cfg.getboolean("update", "check"):
@@ -516,7 +525,21 @@ class App:
 
     def _arrow_hover(self, xy):
         self._main_hover = xy
-        draw(self.canvas, self._ticks(), self.th, xy)
+        draw(self.canvas, self._ticks(), self.th, xy, self._off)
+        self.canvas.configure(cursor="hand2" if xy and self._legend_at(*xy) else "")
+
+    def _legend_at(self, x, y):
+        """Legend entry under (x, y) or None. By position, not "current": every hover redraw replaces the items."""
+        for item in self.canvas.find_overlapping(x, y, x, y):
+            for tag in self.canvas.gettags(item):
+                if tag.startswith("legend:"):
+                    return tag[7:]
+
+    def _toggle_legend(self, x, y):
+        """Show or hide the arrows of the clicked legend entry (this window only, not stored)."""
+        if kind := self._legend_at(x, y):
+            self._off ^= {kind}
+            self._arrow_hover(self._main_hover)
 
     def _hover_at(self, x):
         self._hover = x
@@ -608,7 +631,7 @@ class App:
 
     def redraw(self):
         ticks = self._ticks()
-        draw(self.canvas, ticks, self.th, self._main_hover)
+        draw(self.canvas, ticks, self.th, self._main_hover, self._off)
         for name, cv in self.panel_canvas.items():
             if name == "graph":
                 draw_graph(cv, ticks, self.th, self._hover)
