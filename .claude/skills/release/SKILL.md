@@ -146,6 +146,20 @@ Remove, each by name (no wildcard `rm -rf dist`):
 - `release-<older version>\` folders
 - `build\` and `eos-fight-mon.spec` in the repo root, if still there
 
+**Before deleting anything, check where the running copies live** - the
+user starts builds from anywhere in `dist\`, also from a `release-*\`
+folder, and Windows lets `rm` delete a running PyInstaller exe:
+```powershell
+Get-Process | Where-Object { $_.ProcessName -like 'eos-fight*' } | Select-Object Id, Path
+```
+- Never delete a file or folder that holds a running exe, nor any folder
+  that contains a `config.ini` or `history\` (every copy keeps its own
+  setup and fights next to itself). Skip it and name it in the summary.
+- Remove release folders file by file (their exe, `SHA256SUMS.txt`,
+  `RELEASE_NOTES.md`), then the folder only if it is empty - never
+  `rm -rf` a folder. On 2026-10-14 `rm -rf release-0.6.4` deleted the
+  user's running v0.6.4 together with its `config.ini` and `history\`.
+
 A file that cannot be deleted is probably still running (the user may
 have started an old build): skip it, never kill it, name it in the
 summary. List `dist\` afterwards.
