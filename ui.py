@@ -24,14 +24,18 @@ THEMES = {
     "server": {"bg": "#1a120c", "panel": "#2a1d13", "fg": "#f0e4d8", "dim": "#9a8571", "accent": "#f5a33f"},
 }
 COLORS = {"dmg": "#e5484d", "shield": "#30a46c", "armor": "#30a46c", "hull": "#30a46c", "cap": "#e2b93b",
-          "neut": "#9d5bd2", "nos": "#9d5bd2", "scram": "#f76b15", "point": "#f76b15", "jam": "#f76b15"}
-OFFSET = {"dmg": -9, "shield": 0, "armor": 0, "hull": 0, "cap": 5, "neut": 9, "nos": 9, "scram": 14, "point": 14, "jam": 14}
-LANE = {k: sorted(set(OFFSET.values())).index(v) for k, v in OFFSET.items()}  # 0 = damage … 4 = scram
-LEGEND = [("Damage", "dmg"), ("Reps", "shield"), ("Cap", "cap"), ("Neut/Nos", "neut"), ("Scram/Point/Jam", "scram")]
+          "neut": "#9d5bd2", "nos": "#9d5bd2", "scram": "#f76b15", "point": "#f76b15", "jam": "#05c3dd"}
+OFFSET = {"dmg": -11, "shield": -4, "armor": -4, "hull": -4, "cap": 2, "neut": 7, "nos": 7, "scram": 11, "point": 11,
+          "jam": 15}  # within the smallest box (32 px)
+LANE = {k: sorted(set(OFFSET.values())).index(v) for k, v in OFFSET.items()}  # 0 = damage … 5 = jam
+LEGEND = [("Damage", "dmg"), ("Reps", "shield"), ("Cap", "cap"), ("Neut/Nos", "neut"), ("Scram/Point", "scram"),
+          ("Jam", "jam")]
 LEGEND_OF = {"dmg": "dmg", "shield": "shield", "armor": "shield", "hull": "shield", "cap": "cap",
-             "neut": "neut", "nos": "neut", "scram": "scram", "point": "scram", "jam": "scram"}  # arrow kind → entry
+             "neut": "neut", "nos": "neut", "scram": "scram", "point": "scram", "jam": "jam"}  # arrow kind → entry
 GROUPS = [("Damage", "dmg", {"dmg"}), ("Reps", "shield", REPS - {"cap"}), ("Cap", "cap", {"cap"}),
           ("Neut/Nos", "neut", {"neut", "nos"})]
+EWAR_ROWS = [("Scram/Point", "scram", {"scram", "point"}), ("Jam", "jam", {"jam"})]  # graph: active effects (_ewar)
+JAM_ROW = ("Jams", "jam", {"jam"})  # cockpit
 NAMES = {"dmg": "Damage", "shield": "Shield reps", "armor": "Armor reps", "hull": "Hull reps", "cap": "Cap transfer",
          "neut": "Neut", "nos": "Nos", "scram": "Scram", "point": "Point", "jam": "Jam"}
 BOX_W = 290
@@ -70,16 +74,24 @@ def ship_icon(ship):
 
 
 def _rates(window):
-    """Per-second rates of the given ticks plus the ewar seen in them."""
+    """Per-second rates of the given ticks; ewar has no amount (see _ewar)."""
     secs = TICK * len(window)
-    rates, ewar = defaultdict(float), set()
+    rates = defaultdict(float)
     for t in window:
         for k, s, d, a in t["flows"]:
-            if k in EWAR:
-                ewar.add((k, s, d))
-            else:
+            if k not in EWAR:
                 rates[(k, s, d)] += a / secs
-    return rates, ewar
+    return rates
+
+
+JAM_TICKS = 20 // TICK  # a jam is logged once and holds for the ECM cycle of 20 s
+
+
+def _ewar(ticks, end=None):
+    """Ewar active at ticks[end - 1]: scram/point seen in the last 10 s, a jam in the last 20 s."""
+    end = len(ticks) if end is None else end
+    return {(k, s, d) for back, t in enumerate(reversed(ticks[max(0, end - max(WINDOW, JAM_TICKS)):end]))
+            for k, s, d, _ in t["flows"] if k in EWAR and back < (JAM_TICKS if k == "jam" else WINDOW)}
 
 
 def draw(cv, ticks, th, hover=None, off=()):
@@ -92,7 +104,7 @@ def draw(cv, ticks, th, hover=None, off=()):
         return
     last = ticks[-1]
     ships, left_names = last["ships"], set(last["left"])
-    rates, ewar = _rates(ticks[-WINDOW:])
+    rates, ewar = _rates(ticks[-WINDOW:]), _ewar(ticks)
 
     out_dmg, in_dmg, in_rep = defaultdict(float), defaultdict(float), defaultdict(float)
     for (k, s, d), r in rates.items():
@@ -160,7 +172,7 @@ def draw(cv, ticks, th, hover=None, off=()):
 def summary(ticks):
     """Fight seconds and per group the team's (out/s, in/s, Σ out, Σ in): /s over the last 10 s, Σ over the fight."""
     if not ticks:
-        return 0, {label: (0, 0, 0, 0) for label, _, _ in GROUPS}
+        return 0, {label: (0, 0, 0, 0) for label, _, _ in [*GROUPS, JAM_ROW]}
     left_names = set(ticks[-1]["left"])
 
     def by_side(items):
@@ -168,18 +180,24 @@ def summary(ticks):
         for (k, s, d), v in items:
             out[(k, s in left_names, d in left_names)] += v
         return out
-    now = by_side(_rates(ticks[-WINDOW:])[0].items())
+    now = by_side(_rates(ticks[-WINDOW:]).items())
     total = by_side(((k, s, d), a) for t in ticks for k, s, d, a in t["flows"])
 
     def side(values, kinds, outgoing):
         return sum(v for (k, s_left, d_left), v in values.items() if k in kinds and (s_left if outgoing else d_left))
     secs = ticks[-1]["t"] - ticks[-1].get("start", ticks[0]["t"]) + TICK
-    return secs, {label: (side(now, kinds, True), side(now, kinds, False), side(total, kinds, True),
-                          side(total, kinds, False)) for label, _, kinds in GROUPS}
+    groups = {label: (side(now, kinds, True), side(now, kinds, False), side(total, kinds, True),
+                      side(total, kinds, False)) for label, _, kinds in GROUPS}
+    # jams: active now instead of /s; each jam is logged once, so Σ counts the jams of the fight
+    active = by_side(((k, s, d), 1) for k, s, d in _ewar(ticks) if k == "jam")
+    groups[JAM_ROW[0]] = (side(active, {"jam"}, True), side(active, {"jam"}, False),
+                          side(total, {"jam"}, True), side(total, {"jam"}, False))
+    return secs, groups
 
 
-def draw_cockpit(cv, ticks, th):
-    """The small cockpit window: fight clock, then one row per group with the team's sums."""
+def draw_cockpit(cv, ticks, th, off=()):
+    """The small cockpit window: fight clock, then one row per group with the team's sums (jams: active, Σ count).
+    off: legend entries hidden in the main window are left out here too."""
     cv.delete("all")
     w = cv.winfo_width()
     secs, groups = summary(ticks)
@@ -188,7 +206,8 @@ def draw_cockpit(cv, ticks, th):
     xs = [w - 10 - (3 - i) * col for i in range(4)]
     for x, head in zip(xs, ("out/s", "in/s", "Σ out", "Σ in")):
         cv.create_text(x, 30, anchor="se", text=head, fill=th["dim"], font=(FONT, 9))
-    for row, (label, color_kind, _) in enumerate(GROUPS):
+    rows = [r for r in [*GROUPS, JAM_ROW] if LEGEND_OF[r[1]] not in off]
+    for row, (label, color_kind, _) in enumerate(rows):
         y = 44 + row * 20
         cv.create_text(10, y, anchor="w", text=label, fill=COLORS[color_kind], font=(FONT, 10, "bold"))
         for x, v in zip(xs, groups[label]):
@@ -218,11 +237,15 @@ def series(ticks):
         for sums in window:
             for key, a in sums.items():
                 rates[key] += a / (TICK * len(window))
+        for k, s, d in _ewar(ticks, i + 1):  # ewar has no amount: count the active effects, like the arrows
+            label = next(label for label, _, kinds in EWAR_ROWS if k in kinds)
+            rates[(label, True)] += s in left
+            rates[(label, False)] += d in left
         out.append(rates)
     return out
 
 
-def draw_graph(cv, ticks, th, hover=None):
+def draw_graph(cv, ticks, th, hover=None, off=()):
     """One small chart per group, out solid and in dashed, over the fight; hover (canvas x) picks the shown tick."""
     cv.delete("all")
     w, h = cv.winfo_width(), cv.winfo_height()
@@ -231,14 +254,18 @@ def draw_graph(cv, ticks, th, hover=None):
         cv.create_text(w / 2, h / 2, text="Waiting for a fight …", fill=th["dim"], font=(FONT, 11))
         return
     pad_l, pad_r, top, bottom = 50, 12, 20, 18
-    pw, ph, n = w - pad_l - pad_r, (h - top - bottom) / len(GROUPS), len(data)
+    rows = [r for r in [*GROUPS, *EWAR_ROWS] if LEGEND_OF[r[1]] not in off]  # as hidden in the main window
+    if not rows:
+        cv.create_text(w / 2, h / 2, text="All hidden in the main window", fill=th["dim"], font=(FONT, 11))
+        return
+    pw, ph, n = w - pad_l - pad_r, (h - top - bottom) / len(rows), len(data)
     i = n - 1 if hover is None else max(0, min(n - 1, round((hover - pad_l) / pw * (n - 1))))
     # legend: the line style tells out from in, not colour alone
     cv.create_line(pad_l, 10, pad_l + 22, 10, fill=th["fg"], width=2)
     cv.create_text(pad_l + 28, 10, anchor="w", text="out", fill=th["dim"], font=(FONT, 8))
     cv.create_line(pad_l + 60, 10, pad_l + 82, 10, fill=th["fg"], width=2, dash=(4, 3))
     cv.create_text(pad_l + 88, 10, anchor="w", text="in   (per second, last 10 s)", fill=th["dim"], font=(FONT, 8))
-    for g, (label, color_kind, _) in enumerate(GROUPS):
+    for g, (label, color_kind, _) in enumerate(rows):
         y0 = top + g * ph
         base, height = y0 + ph - 4, ph - 20
         vmax = max([d[(label, o)] for d in data for o in (True, False)] + [1])
@@ -247,7 +274,8 @@ def draw_graph(cv, ticks, th, hover=None):
         cv.create_text(pad_l - 6, base, anchor="e", text="0", fill=th["dim"], font=(FONT, 8))
         cv.create_text(pad_l - 6, base - height, anchor="e", text=fmt(vmax), fill=th["dim"], font=(FONT, 8))
         cv.create_rectangle(pad_l, y0 + 3, pad_l + 8, y0 + 11, fill=COLORS[color_kind], outline="")
-        cv.create_text(pad_l + 13, y0 + 7, anchor="w", text=label, fill=th["fg"], font=(FONT, 9, "bold"))
+        cv.create_text(pad_l + 13, y0 + 7, anchor="w", text=label + (" (active)" if color_kind in ("scram", "jam") else ""),
+                       fill=th["fg"], font=(FONT, 9, "bold"))
         cv.create_text(w - pad_r, y0 + 7, anchor="e", fill=th["fg"], font=(FONT, 9),
                        text=f"out {fmt(data[i][(label, True)])}   in {fmt(data[i][(label, False)])}")
         for outgoing, dash in ((True, None), (False, (4, 3))):
@@ -267,8 +295,8 @@ def draw_graph(cv, ticks, th, hover=None):
 
 MAIN_SIZE = "1150x720"
 PANELS = {  # small extra windows: title, default size, min size, painter
-    "cockpit": ("Cockpit", "340x124", (280, 120), draw_cockpit),
-    "graph": ("Graph", "460x320", (320, 220), draw_graph),
+    "cockpit": ("Cockpit", "340x144", (280, 140), draw_cockpit),
+    "graph": ("Graph", "460x460", (320, 310), draw_graph),
 }
 
 
@@ -372,8 +400,10 @@ class App:
                  font=(FONT, 10, "bold")).pack(side="left", padx=10)
         self._button(self.bar, "Settings", self._settings).pack(side="right", padx=4, pady=4)
         self._button(self.bar, "Reset size", self._reset_size).pack(side="right", padx=4)
-        self._button(self.bar, "Graph", lambda: self._toggle_panel("graph")).pack(side="right", padx=4)
-        self._button(self.bar, "Cockpit", lambda: self._toggle_panel("cockpit")).pack(side="right", padx=4)
+        self.panel_btn = {name: self._button(self.bar, PANELS[name][0], lambda n=name: self._toggle_panel(n))
+                          for name in ("graph", "cockpit")}
+        for btn in self.panel_btn.values():
+            btn.pack(side="right", padx=4)
         self._button(self.bar, "Replays", lambda: self.call(backend.history)).pack(side="right", padx=4)
         if mode == "server":  # only the server may end a fight early
             self._button(self.bar, "Reset", lambda: self.call(backend.reset)).pack(side="right", padx=4)
@@ -459,6 +489,14 @@ class App:
                     self.root.after(300, lambda top=top, geo=geo: top.winfo_exists() and top.geometry(geo))
             else:
                 self._open_panel(name)
+        self._mark_panels()
+
+    def _mark_panels(self):
+        """Cockpit/Graph button filled with the accent colour while its window is open."""
+        th = self.th
+        for name, btn in self.panel_btn.items():
+            on = name in self.panels
+            btn.configure(bg=th["accent"] if on else th["bg"], fg=th["bg"] if on else th["fg"])
 
     def _place(self, geometry):
         # "zoomed WxH+X+Y": the normal place picks the monitor the window maximizes on
@@ -508,6 +546,7 @@ class App:
             top.destroy()
         else:
             self._open_panel(name)
+        self._mark_panels()
 
     def _on_focus(self, e):
         try:
@@ -539,12 +578,13 @@ class App:
         """Show or hide the arrows of the clicked legend entry (this window only, not stored)."""
         if kind := self._legend_at(x, y):
             self._off ^= {kind}
+            self.redraw()  # cockpit and graph hide it too
             self._arrow_hover(self._main_hover)
 
     def _hover_at(self, x):
         self._hover = x
         if "graph" in self.panels:
-            draw_graph(self.panel_canvas["graph"], self._ticks(), self.th, x)
+            draw_graph(self.panel_canvas["graph"], self._ticks(), self.th, x, self._off)
 
     def _apply_topmost(self):
         """Keep cockpit and graph above the game (works with EVE in window or fixed window mode, not in fullscreen)."""
@@ -634,9 +674,9 @@ class App:
         draw(self.canvas, ticks, self.th, self._main_hover, self._off)
         for name, cv in self.panel_canvas.items():
             if name == "graph":
-                draw_graph(cv, ticks, self.th, self._hover)
+                draw_graph(cv, ticks, self.th, self._hover, self._off)
             else:
-                PANELS[name][3](cv, ticks, self.th)
+                PANELS[name][3](cv, ticks, self.th, self._off)
 
     def _drain(self):
         """Handle what the network thread queued."""
@@ -653,7 +693,7 @@ class App:
                 elif kind == "warning":
                     self.warning.set(msg["text"])
                 elif kind == "history":
-                    self._history(msg["sessions"])
+                    self._history(msg["sessions"], msg.get("secs", {}))
                 elif kind == "session":
                     self._start_replay(msg["ticks"])
                 elif kind == "clients":
@@ -694,15 +734,22 @@ class App:
 
     # --- replays ---
 
-    def _history(self, sessions):
-        top = self._dialog("Replays")
+    def _history(self, sessions, secs):
+        if (top := getattr(self, "_replays_top", None)) and top.winfo_exists():  # one replay list per window
+            for w in top.winfo_children():  # fill it again with the fresh list
+                w.destroy()
+            top.deiconify()
+            top.lift()
+            top.focus_force()
+        else:
+            top = self._replays_top = self._dialog("Replays")
         if not sessions:
             tk.Label(top, text="No fights stored yet.", bg=self.th["bg"], fg=self.th["fg"]).pack(
                 padx=20, pady=20)
             return
-        lb = tk.Listbox(top, width=28, height=15, bg=self.th["panel"], fg=self.th["fg"], relief="flat",
+        lb = tk.Listbox(top, width=34, height=15, bg=self.th["panel"], fg=self.th["fg"], relief="flat",
                         font=(FONT, 10))
-        lb.insert("end", *map(fight_label, sessions))
+        lb.insert("end", *(f"{fight_label(n)}   {_mmss(secs[n]) if n in secs else ''}" for n in sessions))
         lb.pack(padx=10, pady=10)
 
         def play(_=None):
@@ -814,6 +861,8 @@ class App:
         top = tk.Toplevel(self.root, bg=self.th["bg"])
         top.title(title)
         top.transient(self.root)
+        x, y = map(int, re.search(r"\+(-?\d+)\+(-?\d+)$", self.root.geometry()).groups())
+        top.geometry(f"+{x + 50}+{y + 50}")  # top left corner 50 px into the main window
         return top
 
     def _settings(self):
@@ -883,8 +932,6 @@ class App:
         self._button(top, "Check for updates", lambda: self._check_update(manual=True)).grid(
             row=len(fields), column=0, sticky="w", padx=10, pady=10)
         self._button(top, "Save", save).grid(row=len(fields), column=1, sticky="e", padx=10, pady=10)
-        x, y = map(int, re.search(r"\+(-?\d+)\+(-?\d+)$", self.root.geometry()).groups())
-        top.geometry(f"+{x + 50}+{y + 50}")  # top left corner 50 px into the main window
 
 
 def _mmss(secs):

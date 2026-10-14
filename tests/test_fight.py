@@ -2,7 +2,7 @@ import tempfile
 import unittest
 
 import pathlib
-from fight import DRONES, IDLE_END, Fight, list_history, load_history, save_history, to_event
+from fight import DRONES, IDLE_END, Fight, history_secs, list_history, load_history, save_history, to_event
 from logparse import Event
 
 
@@ -76,6 +76,7 @@ class FightTest(unittest.TestCase):
         save_history(self.tmp.name, "20991231_235959.jsonl.gz", ticks)
         open(f"{self.tmp.name}/evil.jsonl.gz", "w").close()
         self.assertEqual(list_history(self.tmp.name), ["20991231_235959.jsonl.gz", name])  # newest first
+        self.assertEqual(history_secs(self.tmp.name, [name, "missing.jsonl.gz"]), {name: 2})  # one tick, no idle tail
 
     def test_to_event(self):
         good = ["dmg", "A", None, "B", "Gila", 10, None, "A"]

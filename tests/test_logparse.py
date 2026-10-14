@@ -75,6 +75,18 @@ class ParseTest(unittest.TestCase):
         for line, want in cases.items():
             self.assertEqual(parse(line, ME), want, line)
 
+    def test_all_client_languages(self):
+        # real lines of each EVE client language (names swapped): kind, direction and English weapon/module
+        rows = Path(__file__).with_name("languages.tsv").read_text(encoding="utf-8").splitlines()
+        self.assertEqual({r.split("\t")[0] for r in rows}, {"en", "de", "fr", "es", "ru", "ja", "ko", "zh"})
+        for row in rows:
+            lang, kind, way, weapon, line = row.split("\t")
+            e = parse(line, ME)
+            self.assertIsNotNone(e, row)
+            other = e.dst if way == "out" else e.src
+            self.assertEqual((e.kind, e.src if way == "out" else e.dst, weapon or None), (kind, ME, e.weapon), row)
+            self.assertIn(other, ("Friend One", "Foe One"), row)
+
 
 HEADER = "------------------------------------------------------------\r\n  Gamelog\r\n  Listener: {}\r\n" \
          "  Session Started: 2026.10.12 18:00:00\r\n------------------------------------------------------------\r\n"

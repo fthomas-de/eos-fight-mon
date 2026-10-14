@@ -120,6 +120,25 @@ def load_history(history_dir, name):
         return [json.loads(line) for line in fh]
 
 
+_secs = {}  # (name, mtime) -> fight seconds, so the replay list reads each file once
+
+
+def history_secs(history_dir, names):
+    """Fight length per stored fight, the same as the fight clock shows at its end."""
+    out = {}
+    for name in names:
+        path = Path(history_dir) / name
+        try:
+            key = (name, path.stat().st_mtime_ns)
+            if key not in _secs:
+                ticks = load_history(history_dir, name)
+                _secs[key] = ticks[-1]["t"] - ticks[0]["t"] + TICK if ticks else 0
+        except (OSError, ValueError, KeyError, EOFError):
+            continue
+        out[name] = _secs[key]
+    return out
+
+
 def to_event(x):
     """An event a client sent, checked field by field; None if malformed."""
     try:

@@ -8,7 +8,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from fight import HISTORY_NAME, IDLE_END, TICK, Fight, list_history, load_history, save_history, to_event
+from fight import (HISTORY_NAME, IDLE_END, TICK, Fight, history_secs, list_history, load_history, save_history,
+                   to_event)
 
 CLIENT_LIMIT = 64 * 2**20  # a whole fight comes in one line when replays sync
 SERVER_LIMIT = 2**20
@@ -61,9 +62,9 @@ async def send_reset(cfg):
 
 def _warning(char, watcher):
     if not char:
-        return "no character found in the gamelogs – check the log folder; EVE must run in English"
+        return "no character found in the gamelogs – check the log folder"
     if watcher.foreign:
-        return f"cannot read the log of {char} – set the EVE client language to English"
+        return f"cannot read the log of {char} – unknown log format"
     return ""
 
 
@@ -123,7 +124,8 @@ class Server:
         self._broadcast({"type": "reset"})  # clients then sync the stored fight
 
     async def history(self):
-        self.out({"type": "history", "sessions": list_history(self.fight.history_dir)})
+        names = list_history(self.fight.history_dir)
+        self.out({"type": "history", "sessions": names, "secs": history_secs(self.fight.history_dir, names)})
 
     async def load(self, name):
         self.out({"type": "session", "ticks": load_history(self.fight.history_dir, name)})
@@ -273,7 +275,8 @@ class Client:
                 self.out({"type": "reset"})
 
     async def history(self):
-        self.out({"type": "history", "sessions": list_history(self.history_dir)})
+        names = list_history(self.history_dir)
+        self.out({"type": "history", "sessions": names, "secs": history_secs(self.history_dir, names)})
 
     async def load(self, name):
         self.out({"type": "session", "ticks": load_history(self.history_dir, name)})

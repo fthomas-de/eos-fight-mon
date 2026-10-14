@@ -11,62 +11,121 @@ Event = namedtuple("Event", "kind src src_ship dst dst_ship amount weapon logger
 KINDS = {"dmg", "shield", "armor", "hull", "cap", "neut", "nos", "scram", "point", "jam"}
 
 _LINE = re.compile(r"\[ [\d.: ]+ \] \(combat\) (.*)")
-_TAG = re.compile(r"<[^>]*>")
-_INCOMING = ("<color=0xffcc0000>", "<color=0xffe57f7f>")  # red: done to the listener, cyan: done by them
+# Every client language writes the same markup, only the words differ. So a line is read by its structure:
+# the colour gives kind and direction, <b> holds amount and names, and non-English clients add the English
+# name of ships and modules as <localized hint="...">; the shown name after it ends with "*".
+_HINT = re.compile(r'<localized hint="([^"]*)">[^<*]*\*?')
+_TOKEN = re.compile(r"<(/?)b>|<[^>]*>|([^<]+)")
+_COLOR = re.compile(r"<color=(0x\w+)>")
+_DMG = {"0xff00ffff": False, "0xffcc0000": True}  # colour -> done to the listener
+_ENERGY = {"0xff7fffff": False, "0xffe57f7f": True}  # neut and nos
+_REMOTE = "0xffccff66"  # reps given and received look alike, only one word differs
+_RECEIVED = re.compile(r"\b(?:by|von|par|por)\b|получено|受け|받음|由")  # en de fr es ru ja ko zh
+_REMOTE_KIND = (("Capacitor", "cap"), ("Shield", "shield"), ("Armor", "armor"), ("Hull", "hull"))
+_SCRAM = re.compile(r"scramble|inhibition|Unterbrechung|スクランブル|스크램블|глушени|distorsión|扰频")
+_POINT = re.compile(r"disruption|perturbation|Stör|妨害|디스럽트|подавлени|disrupción|扰断")
+_YOU = {"you", "vous", "sie", "ihnen", "あなた", "당신", "вы", "ti", "tu parte", "你"}
 # the 'label' stands after the ship in newer logs, before it in older ones
 _PARTY = re.compile(r"(.+?)\s*\[[^\]]*\](?:<[^>]*>)?\s*(?:'[^']*')?\s*\((.+?)\)(?:'.*')?")
-_REMOTE_KIND = {"shield": "shield", "armor": "armor", "hull": "hull", "capacitor": "cap"}
-
-_DMG = re.compile(r"(\d+) (to|from) (.+)")
-_REMOTE = re.compile(r"(\d+) remote (shield|armor|hull|capacitor) \w+ (to|by) (.+)")
-_NEUT = re.compile(r"(\d+) GJ energy neutralized (.+)")
-_NOS = re.compile(r"[-+]?(\d+) GJ energy drained (from|to) (.+)")
-_WARP = re.compile(r"Warp (scramble|disruption) attempt from (.+?) to (.+?)!?")
-_JAM = re.compile(r"You're jammed by (.+)")
-_LISTENER = re.compile(rb"Listener: (.+?)\r?\n")
+# header line 3 is "Listener: name" in the client's language; a log without character has the start time there
+_LISTENER = re.compile(rb"\A-+\r?\n[^\n]*\n[^\n:]*: (.+?)\r?\n")
+_STARTED = re.compile(rb"\d{4}\.\d\d\.\d\d \d\d:\d\d:\d\d")
 
 
 def party(text, logger):
     """'Name [CORP]<ALLY> (Ship)'x'' or 'Name[CORP](Ship)' -> (name, ship). NPCs and drones come without ship."""
-    if text == "you":
+    text = text.replace("\x01", "").replace("\x02", "").strip(" ,.!！")
+    if text.lower() in _YOU:
         return logger, None
     m = _PARTY.fullmatch(text)
     return (m[1], m[2]) if m else (text, None)
 
 
+def _pieces(body):
+    """Markup -> [text, bold, closed] per run of plain or bold text; hints become \x01English\x02."""
+    pieces, depth = [], 0
+    for m in _TOKEN.finditer(_HINT.sub(lambda h: f"\x01{h[1]}\x02", body)):
+        if m[2]:
+            if not pieces or pieces[-1][1] != (depth > 0):
+                pieces.append(["", depth > 0, False])
+            pieces[-1][0] += html.unescape(m[2])
+        elif m[0] == "<b>":
+            if not depth:
+                pieces.append(["", True, False])
+            depth += 1
+        elif m[0] == "</b>" and depth:
+            depth -= 1
+            pieces[-1][2] = not depth
+    return [[" ".join(t.split()), b, c] for t, b, c in pieces]
+
+
 def parse(line, logger):
     """One gamelog line -> Event, or None for everything that is not a combat effect (misses included)."""
     m = _LINE.fullmatch(line)
-    if not m:
+    if not m or not (c := _COLOR.match(m[1])):
         return None
-    incoming = m[1].startswith(_INCOMING)
-    text = " ".join(html.unescape(_TAG.sub("", m[1])).split())
-
-    if m := _DMG.fullmatch(text):
-        return _between("dmg", m[2] == "from", m[3], 3, int(m[1]), logger)
-    if m := _REMOTE.fullmatch(text):
-        return _between(_REMOTE_KIND[m[2]], m[3] == "by", m[4], 2, int(m[1]), logger)
-    if m := _NEUT.fullmatch(text):
-        return _between("neut", incoming, m[2], 2, int(m[1]), logger)
-    if m := _NOS.fullmatch(text):
-        return _between("nos", m[2] == "to", m[3], 2, int(m[1]), logger)
-    if m := _JAM.fullmatch(text):
-        return _between("jam", True, m[1], 2, 1, logger)
-    if m := _WARP.fullmatch(text):
-        src, src_ship = party(m[2], logger)
-        dst, dst_ship = party(m[3], logger)
-        return Event("scram" if m[1] == "scramble" else "point", src, src_ship, dst, dst_ship, 1, None, logger)
-    return None
-
-
-def _between(kind, incoming, rest, parts_with_weapon, amount, logger):
-    # rest: "Other - Weapon - Hits" (damage) or "Other - Module"; NPC damage has no weapon part
+    color, pieces = c[1], _pieces(m[1])
+    bold = [p for p in pieces if p[1] and p[0]]
+    if color not in _DMG and color not in _ENERGY and color != _REMOTE:
+        # jams name the ECM module (English drone jams only end in " - Hornet EC-300"), warp attempts do not
+        ecm = re.search("\x01([^\x02]*ECM[^\x02]*)\x02", " ".join(p[0] for p in pieces))
+        tail = pieces[-1][0].rstrip(".")
+        if ecm or not pieces[-1][1] and tail[:1] in "-—":
+            return _jam(bold, ecm[1] if ecm else re.sub(r"^.*[-—] ", "", tail), logger)
+        return _warp(bold, logger)
+    if len(bold) < 2 or not (n := re.search(r"\d+", bold[0][0])):
+        return None
+    amount, other = int(n[0]), bold[1]
+    # after the other party: " - Weapon - Hits" (NPCs without weapon) or " - Module", Spanish with " — "
+    rest = " " + " ".join(p[0] for p in pieces[pieces.index(other) + 1:]).replace(" — ", " - ").rstrip(".")
+    hint = re.search("\x01(.*?)\x02", rest)
     parts = rest.split(" - ")
-    weapon = parts[1] if len(parts) >= parts_with_weapon else None
-    name, ship = party(parts[0], logger)
+    if color in _DMG:
+        weapon = (hint[1] if hint else parts[1]) if len(parts) >= 3 else None
+        return _between("dmg", _DMG[color], other[0], amount, weapon, logger)
+    module = hint[1] if hint else parts[-1] if len(parts) >= 2 else None
+    verb = " ".join(re.sub("\x01.*?\x02", "", p[0]) for p in pieces if not p[1])
+    if color in _ENERGY:  # NPCs name themselves instead of the module
+        nos = "Nosferatu" in (module or "") or " drained " in verb
+        return _between("nos" if nos else "neut", _ENERGY[color], other[0], amount, module, logger)
+    kind = next((k for word, k in _REMOTE_KIND if word in (module or "")), None)
+    return kind and _between(kind, bool(_RECEIVED.search(verb)), other[0], amount, module, logger)
+
+
+def _between(kind, incoming, other, amount, weapon, logger):
+    name, ship = party(other, logger)
     if incoming:
         return Event(kind, name, ship, logger, None, amount, weapon, logger)
     return Event(kind, logger, None, name, ship, amount, weapon, logger)
+
+
+def _jam(bold, module, logger):
+    # "You're <b>jammed</b> by <b>X</b>" has the word and the jammer in bold parts of their own (any order);
+    # the listener's own jam is one bold part with word and target together: "<b>X jammed</b>"
+    if len(bold) >= 2:
+        jammer = next((p for p in bold if _PARTY.search(p[0])), bold[-1])
+        name, ship = party(jammer[0], logger)
+        return Event("jam", name, ship, logger, None, 1, module, logger)
+    if not bold:
+        return None
+    text = bold[0][0].replace("\x01", "").replace("\x02", "")
+    text = re.sub(r"^(Neutralizado:|Сопровождение целей) ", "", text)  # es, ru put the word in front
+    m = _PARTY.match(text)
+    name, ship = (m[1], m[2]) if m else (text.rsplit(" ", 1)[0], None)
+    return Event("jam", logger, None, name, ship, 1, module, logger)
+
+
+def _warp(bold, logger):
+    # "<b>Warp scramble attempt</b> from <b>A</b> to <b>B": B's bold is never closed. The order of the
+    # parts differs between languages, so A is the closed part that is not the attempt itself.
+    word = next((p for p in bold if _SCRAM.search(p[0]) or _POINT.search(p[0])), None)
+    target = next((p for p in bold if not p[2]), None)
+    source = next((p for p in bold if p[2] and p is not word), None)
+    if not (word and target and source) or "{" in target[0]:  # the Japanese client sometimes forgets to fill in names
+        return None
+    src, src_ship = party(source[0], logger)
+    dst, dst_ship = party(target[0], logger)
+    return Event("scram" if _SCRAM.search(word[0]) else "point", src, src_ship, dst, dst_ship, 1, None, logger)
 
 
 _headers = {}  # path -> listener; a gamelog never changes its header
@@ -81,7 +140,7 @@ def listener(path):
             return ""
         if not m:
             return ""  # header not written yet: ask again later
-        _headers[path] = m[1].decode("utf-8", "replace")
+        _headers[path] = "" if _STARTED.fullmatch(m[1]) else m[1].decode("utf-8", "replace")
     return _headers[path]
 
 
@@ -151,6 +210,6 @@ class LogWatcher:
                 if e := parse(line, char):
                     events.append(e)
                     self.parsed += 1
-                if "(combat)" in line and " misses " not in line:  # misses are not parsed on purpose
+                if "(combat) <color=" in line:  # misses start without colour and are not parsed on purpose
                     self.combat += 1
         return events
