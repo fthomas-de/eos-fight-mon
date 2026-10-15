@@ -2,24 +2,28 @@
 import argparse
 import asyncio
 import configparser
+import hashlib
 import os
 import queue
 import secrets
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 
 import logparse
 import net
+import snap
 import update
 
 BASE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 DEFAULTS = {
     "general": {"port": "47110", "token": "", "history_dir": "history", "public_address": "", "idle_end": "60",
-                "always_on_top": "no", "graph_on_top": "no", "friendly_fire": "no"},
+                "always_on_top": "no", "graph_on_top": "no", "friendly_fire": "no",
+                "graph_live_minutes": "5", "graph_replay_minutes": "10"},
     "client": {"host": "localhost", "log_dir": "~/Documents/EVE/logs/Gamelogs", "auto_connect": "yes"},
     "update": {"check": "yes"},
 }
@@ -38,13 +42,46 @@ def load_config(path):
     return cfg
 
 
-def restart(cfg_path, char, geometry, mode):
-    """Start a fresh copy in the given mode."""
+def restart(cfg_path, geometry):
+    """Start a fresh copy; it opens the tabs this one stored on closing."""
     cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, str(Path(__file__).resolve())]
-    cmd += ["--config", str(cfg_path), "--geometry", geometry] + (["--char", char] if char else [])
-    cmd += ["--server"] if mode == "server" else []
+    cmd += ["--config", str(cfg_path), "--geometry", geometry, "--restart"]
     # a one-file build must unpack itself anew instead of reusing this instance's folder, which goes away
     subprocess.Popen(cmd, env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+
+
+_lock = []  # the open lock file; the OS frees the lock when the process ends, also after a crash
+
+
+def single_instance(cfg_path, wait):
+    """Lock this config file for the life of the process. None if we got it, else the holder's process id
+    (0 if unknown). Waits up to `wait` seconds, so a restart can let its old copy go first."""
+    key = str(cfg_path).lower() if sys.platform == "win32" else str(cfg_path)
+    fh = open(Path(tempfile.gettempdir()) / f"eos-fight-mon-{hashlib.sha1(key.encode()).hexdigest()[:12]}.lock", "a+")
+    end = time.time() + wait
+    while True:
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                fh.seek(1000)  # lock a byte past the process id, so others can still read it
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:
+            if time.time() >= end:
+                os.lseek(fh.fileno(), 0, 0)
+                pid = os.read(fh.fileno(), 20).decode(errors="ignore").strip()  # unbuffered: never touch byte 1000
+                fh.close()
+                return int(pid) if pid.isdigit() else 0
+            time.sleep(0.2)
+    fh.seek(0)
+    fh.truncate()
+    fh.write(str(os.getpid()))
+    fh.flush()
+    _lock.append(fh)
+    return None
 
 
 def printer():
@@ -84,28 +121,31 @@ def lower_priority():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--server", action="store_true", help="run as server")
+    ap.add_argument("--server", action="store_true", help="open the server tab too")
     ap.add_argument("--headless", action="store_true", help="server without window (e.g. Linux)")
     ap.add_argument("--reset", action="store_true", help="end the running fight of the server on this machine")
     ap.add_argument("--geometry", help="window size and place, WxH+X+Y or \"zoomed WxH+X+Y\" (kept on restart)")
-    ap.add_argument("--char", help="character of this instance (default: most recently active)")
+    ap.add_argument("--char", help="open only this character's tab (default: the tabs open at the last close)")
     ap.add_argument("--version", action="version", version=f"eos-fight-mon {update.VERSION}")
     ap.add_argument("--config", default=str(BASE / "config.ini"), help="path to config.ini")
+    ap.add_argument("--restart", action="store_true", help=argparse.SUPPRESS)  # wait for the old copy to end
     args = ap.parse_args()
     cfg_path = Path(args.config).resolve()
     os.chdir(BASE)  # relative paths in the config (history) live next to the program
+    if not args.headless and not args.reset:  # one window per config: a second start shows the running one
+        if (other := single_instance(cfg_path, 15 if args.restart else 2)) is not None:
+            snap.focus(other)
+            print(f"eos-fight-mon already runs with {cfg_path}", flush=True)
+            return
     update.cleanup()
     cfg = load_config(cfg_path)
     if args.reset:
         print(asyncio.run(net.send_reset(cfg)), flush=True)
         return
-    mode = "server" if args.server or args.headless else "client"  # a plain start is always a client
     lower_priority()
 
-    # only the server asks for its public address
-    code = mode == "server" and f"{net.public_address(cfg)}:{cfg['general']['port']}/{cfg['general']['token']}"
-
     if args.headless:
+        code = f"{net.public_address(cfg)}:{cfg['general']['port']}/{cfg['general']['token']}"
         print(f"eos-fight-mon v{update.VERSION} server running. Connection code for clients: {code}", flush=True)
         if cfg.getboolean("update", "check"):
             def check():  # CCP may need several handshakes: do not hold up the server start
@@ -133,26 +173,15 @@ def main():
         asyncio.run(server.run())
         return
 
-    q = queue.Queue()
-    if mode == "server":
-        backend = net.Server(cfg, q.put)
-    else:
-        import snap
-        chars = logparse.characters(cfg["client"]["log_dir"])
-        free = [c for c in chars if not snap.char_open(c)]  # one instance per character: skip those already open
-        backend = net.Client(cfg, logparse.LogWatcher(), q.put, args.char or next(iter(free + chars), None))
-    loop = asyncio.new_event_loop()
+    loop = asyncio.new_event_loop()  # one loop runs the server and the clients of all tabs
+    threading.Thread(target=loop.run_forever, daemon=True).start()
 
-    def run():
-        try:
-            loop.run_until_complete(backend.run())
-        except Exception as e:  # e.g. port already in use: show it instead of dying silently
-            q.put({"type": "status", "text": f"error: {e}"})
-    threading.Thread(target=run, daemon=True).start()
+    def make(mode, char, out):
+        return net.Server(cfg, out) if mode == "server" else net.Client(cfg, logparse.LogWatcher(), out, char)
 
-    from ui import App  # only here, so a headless Linux server needs no Tk
-    App(mode, backend, loop, q, cfg, cfg_path, code, lambda char, geo, mode: restart(cfg_path, char, geo, mode),
-        args.geometry).root.mainloop()
+    from ui import App, start_tabs  # only here, so a headless Linux server needs no Tk
+    App(start_tabs(cfg, cfg_path, args.char, args.server), make, loop, queue.Queue(), cfg, cfg_path,
+        lambda geo: restart(cfg_path, geo), args.geometry).root.mainloop()
 
 
 if __name__ == "__main__":

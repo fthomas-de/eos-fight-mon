@@ -97,11 +97,12 @@ class Server:
         self.clients = {}  # writer -> characters of that client
         self.versions = {}  # writer -> program version of that client
         self._shown = None  # client list last sent to the window
+        self._srv = None
 
     async def run(self):
         for attempt in range(10):  # after a restart the old copy may hold the port for a moment
             try:
-                srv = await asyncio.start_server(self._handle, port=self.cfg.getint("general", "port"),
+                srv = self._srv = await asyncio.start_server(self._handle, port=self.cfg.getint("general", "port"),
                                                  limit=SERVER_LIMIT)
                 break
             except OSError:
@@ -117,9 +118,18 @@ class Server:
                 self.fight.friendly_fire = friendly_fire(self.cfg)
                 self._report_clients()
                 if tick := self.fight.tick(now):
-                    self._broadcast({"type": "tick", **tick})
+                    self._broadcast({"type": "tick", **tick, "idle_end": idle_end(self.cfg)})  # clients show the end countdown
                 if self.fight.ended(now, idle_end(self.cfg)):
                     await self.reset()
+
+    async def stop(self):
+        """Its tab is closed: store the running fight, free the port and drop the clients."""
+        self.fight.end()
+        self.out({"type": "reset"})
+        if self._srv:
+            self._srv.close()
+        for w in list(self.clients):
+            w.close()
 
     async def reset(self):
         self.fight.end()
@@ -165,7 +175,7 @@ class Server:
             self.versions[writer] = str(hello.get("version", ""))[:20]
             writer.write(_line({"type": "version", "version": VERSION}))  # older clients ignore it
             for tick in self.fight.ticks:  # late joiners get the running fight from its start
-                writer.write(_line({"type": "tick", **tick}))
+                writer.write(_line({"type": "tick", **tick, "idle_end": idle_end(self.cfg)}))
             self.clients[writer] = set()
             async for line in reader:
                 msg = json.loads(line)
@@ -283,7 +293,7 @@ class Client:
             self.fight.friendly_fire = friendly_fire(self.cfg)
             self.fight.add(events)
             if tick := self.fight.tick(now):
-                self.out({"type": "tick", **tick})
+                self.out({"type": "tick", **tick, "idle_end": idle_end(self.cfg)})
             if self.fight.ended(now, idle_end(self.cfg)):
                 self.fight.end()
                 self.out({"type": "reset"})
@@ -300,6 +310,13 @@ class Client:
         if not on and self.writer:
             self.writer.close()
         self.wake.set()
+
+    async def stop(self):
+        """Its tab is closed: stop reading the logs and leave the server."""
+        if task := getattr(self, "_pump_task", None):
+            task.cancel()
+        if self.writer:
+            self.writer.close()
 
     async def set_char(self, char):
         self.char = char

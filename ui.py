@@ -1,4 +1,5 @@
-"""Tk windows: client ships left, everyone else right, effects as arrows in between; small cockpit and graph windows."""
+"""Tk windows: one tab per client character and the server; client ships left, everyone else right, effects as
+arrows in between; small cockpit and graph windows per tab."""
 import asyncio
 import configparser
 import ctypes
@@ -15,9 +16,10 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import logparse
+import net
 import snap
 import update
-from fight import EWAR, REPS, TICK, WINDOW
+from fight import EWAR, IDLE_END, REPS, TICK, WINDOW
 
 THEMES = {
     "client": {"bg": "#0e1621", "panel": "#172333", "fg": "#d8e4f0", "dim": "#71859a", "accent": "#3fa9f5"},
@@ -94,9 +96,10 @@ def _ewar(ticks, end=None):
             for k, s, d, _ in t["flows"] if k in EWAR and back < (JAM_TICKS if k == "jam" else WINDOW)}
 
 
-def draw(cv, ticks, th, hover=None, off=()):
+def draw(cv, ticks, th, hover=None, off=(), countdown=None):
     """Draw a fight up to its last tick: ships with per-second rates of the last 10 s; hover (x, y) shows the arrows there.
-    off: legend entries whose arrows are hidden (clicking an entry toggles it)."""
+    off: legend entries whose arrows are hidden (clicking an entry toggles it).
+    countdown: seconds until the live fight ends; shown in place of the enemies while nobody acts."""
     cv.delete("all")
     w, h = cv.winfo_width(), cv.winfo_height()
     if not ticks:
@@ -123,6 +126,12 @@ def draw(cv, ticks, th, hover=None, off=()):
     if len(right) > rows:
         right = right[:rows - 1] + [f"+{len(right) - rows + 1} more"]
     pos, tips = {}, {}
+    if countdown is not None and not names:
+        x = w - 20 - BOX_W
+        cv.create_rectangle(x, top, x + BOX_W, top + 64, fill=th["panel"], outline=th["dim"])
+        cv.create_text(x + 10, top + 6, anchor="nw", text="No fight activity", fill=th["dim"], font=(FONT, 10))
+        cv.create_text(x + 10, top + 26, anchor="nw", text=f"Fight ends in {_mmss(countdown)}", fill=th["accent"],
+                       font=(FONT, 16, "bold"))
     for col, column in enumerate((left[:rows], right)):
         x = 20 if col == 0 else w - 20 - BOX_W
         for i, n in enumerate(column):
@@ -245,11 +254,14 @@ def series(ticks):
     return out
 
 
-def draw_graph(cv, ticks, th, hover=None, off=()):
-    """One small chart per group, out solid and in dashed, over the fight; hover (canvas x) picks the shown tick."""
+def draw_graph(cv, ticks, th, hover=None, off=(), span=None):
+    """One small chart per group, out solid and in dashed, over the fight or its last span seconds;
+    hover (canvas x) picks the shown tick and lists its log events."""
     cv.delete("all")
     w, h = cv.winfo_width(), cv.winfo_height()
-    data = series(ticks)
+    first = max(0, len(ticks) - span // TICK) if span else 0  # only the display is cut, the fight stays whole
+    margin = max(0, first - max(WINDOW, JAM_TICKS))  # earlier ticks the rates of the first shown one need
+    data = series(ticks[margin:])[first - margin:]
     if len(data) < 2:
         cv.create_text(w / 2, h / 2, text="Waiting for a fight …", fill=th["dim"], font=(FONT, 11))
         return
@@ -283,17 +295,37 @@ def draw_graph(cv, ticks, th, hover=None, off=()):
                    for v in (pad_l + pw * j / (n - 1), base - height * d[(label, outgoing)] / vmax)]
             cv.create_line(*pts, fill=COLORS[color_kind], width=2, dash=dash)
     t0 = ticks[0]["t"]
-    cv.create_text(pad_l, h - 4, anchor="sw", text="00:00", fill=th["dim"], font=(FONT, 8))
+    cv.create_text(pad_l, h - 4, anchor="sw", text=_mmss(ticks[first]["t"] - t0), fill=th["dim"], font=(FONT, 8))
     cv.create_text(w - pad_r, h - 4, anchor="se", text=_mmss(ticks[-1]["t"] - t0 + TICK), fill=th["dim"],
                    font=(FONT, 8))
     if hover is not None:
         x = pad_l + pw * i / (n - 1)
         cv.create_line(x, top, x, h - bottom, fill=th["dim"])
-        cv.create_text(x, h - 4, anchor="s", text=_mmss(ticks[i]["t"] - t0 + TICK), fill=th["fg"],
+        tick = ticks[first + i]
+        cv.create_text(x, h - 4, anchor="s", text=_mmss(tick["t"] - t0 + TICK), fill=th["fg"],
                        font=(FONT, 8, "bold"))
+        _events_box(cv, tick, th, x, top, h - bottom, w, off, tick["t"] - t0)
+
+
+def _events_box(cv, tick, th, x, top, bottom, w, off, secs):
+    """The log events of one tick beside the hover line, by kind as in the legend, biggest first."""
+    order = [k for _, entry in LEGEND for k in NAMES if LEGEND_OF[k] == entry]
+    flows = sorted((f for f in tick["flows"] if LEGEND_OF[f[0]] not in off), key=lambda f: (order.index(f[0]), -f[3]))
+    lines = [f"{NAMES[k]}  {s} → {d}" + ("" if k in EWAR else f"  {fmt(a)}") for k, s, d, a in flows] or ["no events"]
+    room = max(1, int((bottom - top - 24) // 13))
+    if len(lines) > room:
+        lines = lines[:room - 1] + [f"+{len(lines) - room + 1} more"]
+    text = cv.create_text(x + 10, top + 6, anchor="nw", fill=th["fg"], font=(FONT, 8),
+                          text=f"Log events {_mmss(secs)} – {_mmss(secs + TICK)}\n" + "\n".join(lines))
+    x1, y1, x2, y2 = cv.bbox(text)
+    if x2 > w - 6:  # no room right of the line: put the box on its left, but never past the left edge
+        cv.move(text, max(6 - x1, x - 10 - x2), 0)
+        x1, y1, x2, y2 = cv.bbox(text)
+    cv.tag_lower(cv.create_rectangle(x1 - 6, y1 - 4, x2 + 6, y2 + 4, fill=th["panel"], outline=th["accent"]), text)
 
 
 MAIN_SIZE = "1150x720"
+ICONS = {"cockpit": "⏱", "graph": "∿"}  # on the Cockpit/Graph buttons (Segoe UI Symbol; Tk falls back to it)
 PANELS = {  # small extra windows: title, default size, min size, painter
     "cockpit": ("Cockpit", "340x144", (280, 140), draw_cockpit),
     "graph": ("Graph", "460x460", (320, 310), draw_graph),
@@ -347,48 +379,83 @@ def fight_label(name):
     return start.astimezone().strftime("%Y-%m-%d  %H:%M:%S")
 
 
-class App:
-    def __init__(self, mode, backend, loop, q, cfg, cfg_path, connect_code=None, restart=None, geometry=None):
-        self.mode, self.backend, self.loop, self.q = mode, backend, loop, q
-        self._restart = restart
-        self.cfg, self.cfg_path = cfg, cfg_path
+SERVER = ":server"  # the server tab in [windows] tabs; a colon is never part of a character name
+
+
+def _saved_windows(cfg_path):
+    saved = configparser.ConfigParser(interpolation=None)
+    saved.read(cfg_path, encoding="utf-8-sig")  # fresh: other instances write the file too
+    return saved["windows"] if saved.has_section("windows") else {}
+
+
+def start_tabs(cfg, cfg_path, char=None, server=False):
+    """[(mode, character)] to open: --char alone, else the tabs open at the last close; never one another
+    running instance shows. --server adds the server tab."""
+    taken = snap.open_tabs()
+    names = [char] if char else [n for n in _saved_windows(cfg_path).get("tabs", "").split("|") if n]
+    tabs = []
+    for n in names:
+        tab = ("server", None) if n == SERVER else ("client", n)
+        if tab not in tabs and (n != SERVER or "Server" not in taken) and n not in taken:
+            tabs.append(tab)
+    if server and ("server", None) not in tabs:
+        tabs.insert(0, ("server", None))
+    if not tabs:
+        chars = logparse.characters(cfg["client"]["log_dir"])
+        tabs.append(("client", next(iter([c for c in chars if c not in taken] + chars), None)))
+    return tabs
+
+
+def _button(parent, text, cmd, th):
+    return tk.Button(parent, text=text, command=cmd, bg=th["bg"], fg=th["fg"], relief="flat",
+                     activebackground=th["accent"], activeforeground=th["bg"], padx=8)
+
+
+async def _run(backend, out):
+    try:
+        await backend.run()
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # e.g. port already in use: show it instead of dying silently
+        out({"type": "status", "text": f"error: {e}"})
+
+
+class Tab:
+    """One character's client or the server: its own bar, fight view, replays, cockpit and graph windows."""
+
+    def __init__(self, app, tid, mode, char=None):
+        self.app, self.tid, self.mode = app, tid, mode
         self.th = th = THEMES[mode]
+        cfg = app.cfg
         self.live = []  # ticks of the running fight
         self.replay, self.pos, self.playing, self._timer = None, 0, False, None
+        self.panels, self.panel_canvas, self._panel_geo, self._hover = {}, {}, {}, None
+        self._main_hover, self._replays_top = None, None
+        self._off = set()  # legend entries whose arrows are hidden
+        out = self.out = lambda msg: app.q.put((tid, msg))
+        self.backend = app.make(mode, char, out)
+        self.future = asyncio.run_coroutine_threadsafe(_run(self.backend, out), app.loop)
 
-        root = self.root = tk.Tk()
-        root.minsize(900, 560)
-        root.geometry(MAIN_SIZE)
-        root.iconphoto(True, tk.PhotoImage(data=APP_ICON))  # True: cockpit, graph and dialogs get it too
-        self._normal_geo = None  # last place while neither maximized nor minimized
-        if geometry:  # a restart passes the place it had
-            self._place(geometry)
-        root.bind("<Configure>", self._track_place, add="+")
-        self._sizes, self._snap_jobs = {}, {}
-        root.bind("<Configure>", self._on_move, add="+")
-        root.protocol("WM_DELETE_WINDOW", self._close)
-        # any widget getting focus (a click often focuses a child, not the window) raises the whole group
-        root.bind_all("<FocusIn>", self._on_focus, add="+")
-        root.configure(bg=th["bg"])
-
-        self.bar = tk.Frame(root, bg=th["panel"])
+        self.frame = tk.Frame(app.root, bg=th["bg"])
+        self.bar = tk.Frame(self.frame, bg=th["panel"])
         self.bar.pack(fill="x")
         if mode == "client":
-            self.char = tk.StringVar(value=backend.char or "")
+            self.char = tk.StringVar(value=char or "")
             box = ttk.Combobox(self.bar, textvariable=self.char, state="readonly", width=24,
                                postcommand=lambda: box.configure(values=logparse.characters(cfg["client"]["log_dir"])))
             box.bind("<<ComboboxSelected>>", lambda e: self._set_char())
             box.pack(side="left", padx=(10, 4), pady=4)
-            self._button(self.bar, "Paste code", self._paste_code).pack(side="left", padx=4)
+            _button(self.bar, "⤓ Paste code", app._paste_code, th).pack(side="left", padx=4)
         else:
             tk.Label(self.bar, text="Connection code:", bg=th["panel"], fg=th["dim"]).pack(side="left", padx=(10, 4))
-            code = tk.Entry(self.bar, width=len(connect_code) + 2, bg=th["bg"], fg=th["fg"], relief="flat",
-                            readonlybackground=th["bg"])
-            code.insert(0, connect_code)
-            code.configure(state="readonly")
-            code.pack(side="left", pady=4)
-            self._button(self.bar, "Copy", lambda: self._copy(connect_code)).pack(side="left", padx=4)
-        foot = tk.Frame(root, bg=th["panel"])  # connection messages, below everything else
+            self.code = tk.Entry(self.bar, width=46, bg=th["bg"], fg=th["fg"], relief="flat", readonlybackground=th["bg"])
+            self._set_code("…")
+            self.code.pack(side="left", pady=4)
+            _button(self.bar, "⧉ Copy", self._copy, th).pack(side="left", padx=4)
+            # the public address may take a few seconds to look up
+            threading.Thread(target=lambda: out({"type": "code", "text": f"{net.public_address(cfg)}:"
+                             f"{cfg['general']['port']}/{cfg['general']['token']}"}), daemon=True).start()
+        foot = tk.Frame(self.frame, bg=th["panel"])  # connection messages, below everything else
         foot.pack(side="bottom", fill="x")
         line = tk.Frame(foot, bg=th["panel"])
         line.pack(fill="x")
@@ -398,77 +465,90 @@ class App:
         self.warning = tk.StringVar()
         tk.Label(line, textvariable=self.warning, bg=th["panel"], fg=COLORS["dmg"],
                  font=(FONT, 10, "bold")).pack(side="left", padx=10)
-        self._button(self.bar, "Settings", self._settings).pack(side="right", padx=4, pady=4)
-        self._button(self.bar, "Reset size", self._reset_size).pack(side="right", padx=4)
-        self.panel_btn = {name: self._button(self.bar, PANELS[name][0], lambda n=name: self._toggle_panel(n))
-                          for name in ("graph", "cockpit")}
+        self.panel_btn = {name: _button(self.bar, f"{ICONS[name]} {PANELS[name][0]}",
+                                        lambda n=name: self._toggle_panel(n), th) for name in ("graph", "cockpit")}
         for btn in self.panel_btn.values():
             btn.pack(side="right", padx=4)
-        self._button(self.bar, "Replays", lambda: self.call(backend.history)).pack(side="right", padx=4)
+        _button(self.bar, "⏪ Replays", lambda: self.call(self.backend.history), th).pack(side="right", padx=4)
         if mode == "server":  # only the server may end a fight early
-            self._button(self.bar, "Reset", lambda: self.call(backend.reset)).pack(side="right", padx=4)
-        if mode == "client":
-            self.enabled = cfg.getboolean("client", "auto_connect")
-            self.conn = self._button(self.bar, "", self._toggle)
-            self.conn.pack(side="right", padx=4)
-            self._conn_text()
-        self.panels, self.panel_canvas, self._panel_geo, self._hover = {}, {}, {}, None
-        self._main_hover = None
-        self._off = set()  # legend entries whose arrows are hidden
-        self._title()
-        if mode == "server":  # who is connected, with the character each client picked
-            self.clients = tk.StringVar(value="no client connected")
+            _button(self.bar, "⏹ Reset", lambda: self.call(self.backend.reset), th).pack(side="right", padx=4)
+            self.clients = tk.StringVar(value="no client connected")  # with the character each client picked
             info = tk.Label(foot, textvariable=self.clients, bg=th["panel"], fg=th["dim"], font=(FONT, 9),
                             anchor="w", justify="left")
             info.pack(fill="x", padx=10, pady=(0, 2))
             info.bind("<Configure>", lambda e: info.configure(wraplength=e.width - 10))
+        else:
+            self.enabled = cfg.getboolean("client", "auto_connect")
+            self.conn = _button(self.bar, "", self._toggle, th)
+            self.conn.pack(side="right", padx=4)
+            self._conn_text()
 
-        self.replay_bar = tk.Frame(root, bg=th["panel"])
-        self.play_btn = self._button(self.replay_bar, "Stop", self._play_pause)
+        self.replay_bar = tk.Frame(self.frame, bg=th["panel"])
+        self.play_btn = _button(self.replay_bar, "⏸ Stop", self._play_pause, th)
         self.play_btn.pack(side="left", padx=4, pady=4)
         self.scale = tk.Scale(self.replay_bar, orient="horizontal", showvalue=False, command=self._seek,
                               bg=th["panel"], fg=th["fg"], troughcolor=th["bg"], highlightthickness=0)
         self.scale.pack(side="left", fill="x", expand=True, padx=4)
         self.replay_label = tk.Label(self.replay_bar, bg=th["panel"], fg=th["fg"])
         self.replay_label.pack(side="left", padx=4)
-        self._button(self.replay_bar, "Back to live", self._stop_replay).pack(side="left", padx=4)
+        _button(self.replay_bar, "● Back to live", self._stop_replay, th).pack(side="left", padx=4)
 
-        self.canvas = tk.Canvas(root, bg=th["bg"], highlightthickness=0)
+        self.canvas = tk.Canvas(self.frame, bg=th["bg"], highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda e: self.redraw())
         self.canvas.bind("<Motion>", lambda e: self._arrow_hover((e.x, e.y)))
         self.canvas.bind("<Leave>", lambda e: self._arrow_hover(None))
         self.canvas.bind("<Button-1>", lambda e: self._toggle_legend(e.x, e.y))
-        self._restore_layout(main=not geometry, first=True)
-        root.after(100, self._drain)
-        if cfg.getboolean("update", "check"):
-            root.after(5000, self._check_online)  # after the first connection messages
+        self._restore_layout(first=True)
 
-    def _button(self, parent, text, cmd):
-        th = self.th
-        return tk.Button(parent, text=text, command=cmd, bg=th["bg"], fg=th["fg"], relief="flat",
-                         activebackground=th["accent"], activeforeground=th["bg"], padx=8)
+    def name(self):
+        """Shown on the tab and in the main window title (snap.open_tabs reads it there)."""
+        return "Server" if self.mode == "server" else self.char.get() or "no character"
 
     def _char(self):
         return self.char.get() if self.mode == "client" else None
 
-    def _title(self):
-        who = f"Client – {self.char.get() or 'no character'}" if self.mode == "client" else "Server"
-        self.root.title(f"eos-fight-mon – {who}")
+    def _window_key(self):
+        return "server" if self.mode == "server" else self._char() or "client"
+
+    def title(self):
         for name, top in self.panels.items():
-            top.title(f"{PANELS[name][0]} – {self._char() or 'Server'}")
+            top.title(f"{PANELS[name][0]} – {self.name()}")
+
+    def call(self, fn, *args):
+        asyncio.run_coroutine_threadsafe(fn(*args), self.app.loop)
+
+    def close(self):
+        """Store the window places, close the small windows and stop the backend (a server stores its fight)."""
+        if self._timer:
+            self.app.root.after_cancel(self._timer)
+        for top in self.panels.values():
+            top.destroy()
+        for top in (self._replays_top,):
+            if top and top.winfo_exists():
+                top.destroy()
+        self.frame.destroy()
+        stop = asyncio.run_coroutine_threadsafe(self.backend.stop(), self.app.loop)
+        stop.add_done_callback(lambda _: self.future.cancel())
+
+    def _set_code(self, text):
+        self.code.configure(state="normal")
+        self.code.delete(0, "end")
+        self.code.insert(0, text)
+        self.code.configure(state="readonly")
+
+    def _copy(self):
+        self.app.root.clipboard_clear()
+        self.app.root.clipboard_append(self.code.get())
+        self.status.set("connection code copied")
 
     # --- cockpit and graph windows ---
 
-    def _restore_layout(self, main=True, first=False):
-        """Put this character's windows where they were last time (also after picking another character).
+    def _restore_layout(self, first=False):
+        """Put this tab's small windows where they were last time (also after picking another character).
         A closed cockpit or graph is stored as "off WxH+X+Y" and reopens at that place."""
-        saved = configparser.ConfigParser(interpolation=None)
-        saved.read(self.cfg_path, encoding="utf-8-sig")  # fresh: other instances write the file too
-        windows = saved["windows"] if saved.has_section("windows") else {}
-        key = self._layout_key = self._window_key(self._char())
-        if main and key in windows:
-            self._place(windows[key])
+        windows = _saved_windows(self.app.cfg_path)
+        key = self._layout_key = self._window_key()
         for name in PANELS:
             entry = windows.get(f"{key}.{name}")
             if entry is None:  # character never saved: both open at start, else leave them as they are
@@ -486,10 +566,16 @@ class App:
                     top.geometry(geo)
                     top.update_idletasks()
                     # Windows hands Tk the old place back while the character list closes: set it once more
-                    self.root.after(300, lambda top=top, geo=geo: top.winfo_exists() and top.geometry(geo))
+                    self.app.root.after(300, lambda top=top, geo=geo: top.winfo_exists() and top.geometry(geo))
             else:
                 self._open_panel(name)
         self._mark_panels()
+
+    def windows(self):
+        """config [windows] entries of the small windows, under the character they belong to."""
+        key = self._layout_key  # also right after picking another character
+        return {f"{key}.{name}": self.panels[name].geometry() if name in self.panels
+                else f"off {self._panel_geo.get(name, '')}".strip() for name in PANELS}
 
     def _mark_panels(self):
         """Cockpit/Graph button filled with the accent colour while its window is open."""
@@ -498,19 +584,10 @@ class App:
             on = name in self.panels
             btn.configure(bg=th["accent"] if on else th["bg"], fg=th["bg"] if on else th["fg"])
 
-    def _place(self, geometry):
-        # "zoomed WxH+X+Y": the normal place picks the monitor the window maximizes on
-        if _valid_place(normal := geometry.removeprefix("zoomed").strip()):
-            self._normal_geo = normal
-            if self.root.state() == "zoomed":
-                self.root.state("normal")
-            self.root.geometry(normal)
-        if geometry.startswith("zoomed"):
-            self.root.state("zoomed")
-
     def _open_panel(self, name):
         _, size, minsize, _ = PANELS[name]
-        top = self.panels[name] = tk.Toplevel(self.root, bg=self.th["bg"])  # not transient: stays when the main one is minimized
+        th = self.th
+        top = self.panels[name] = tk.Toplevel(self.app.root, bg=th["bg"])  # not transient: stays when the main one is minimized
         top.minsize(*minsize)
         top.geometry(size)
         if _valid_place(geometry := self._panel_geo.get(name, "")):
@@ -518,26 +595,18 @@ class App:
         if sys.platform == "win32":
             top.attributes("-toolwindow", True)  # thin title bar
         top.protocol("WM_DELETE_WINDOW", lambda: self._toggle_panel(name))
-        top.bind("<Configure>", self._on_move)
-        cv = self.panel_canvas[name] = tk.Canvas(top, bg=self.th["bg"], highlightthickness=0)
+        top.bind("<Configure>", self.app._on_move)
+        cv = self.panel_canvas[name] = tk.Canvas(top, bg=th["bg"], highlightthickness=0)
         cv.pack(fill="both", expand=True)
         cv.bind("<Configure>", lambda e: self.redraw())
-        tk.Button(top, text="⟲", command=lambda: self._reset_size(name), bg=self.th["bg"], fg=self.th["dim"],
-                  relief="flat", bd=0, padx=3, pady=0, font=(FONT, 8), activebackground=self.th["accent"],
+        tk.Button(top, text="⟲", command=lambda: top.geometry(PANELS[name][1]), bg=th["bg"], fg=th["dim"],
+                  relief="flat", bd=0, padx=3, pady=0, font=(FONT, 8), activebackground=th["accent"],
                   cursor="hand2").place(relx=1, x=-2, y=1, anchor="ne")
         if name == "graph":
             cv.bind("<Motion>", lambda e: self._hover_at(e.x))
             cv.bind("<Leave>", lambda e: self._hover_at(None))
-        self._title()
-        self._apply_topmost()
-
-    def _reset_size(self, name=None):
-        """Back to the size the window had at the very first start; the place stays."""
-        if name:
-            self.panels[name].geometry(PANELS[name][1])
-        else:
-            self.root.state("normal")
-            self.root.geometry(MAIN_SIZE)
+        self.title()
+        self.apply_topmost()
 
     def _toggle_panel(self, name):
         if top := self.panels.pop(name, None):
@@ -548,23 +617,17 @@ class App:
             self._open_panel(name)
         self._mark_panels()
 
-    def _on_focus(self, e):
-        try:
-            top = e.widget.winfo_toplevel()
-        except (AttributeError, tk.TclError):  # e.g. a combobox popdown tkinter does not know
-            return
-        if top is self.root or top in self.panels.values():
-            self._raise_group(top)
+    def apply_topmost(self):
+        """Keep cockpit and graph above the game (works with EVE in window or fixed window mode, not in fullscreen)."""
+        for name, key in (("cockpit", "always_on_top"), ("graph", "graph_on_top")):
+            if top := self.panels.get(name):
+                top.attributes("-topmost", self.app.cfg.getboolean("general", key))
 
-    def _raise_group(self, clicked):
-        """Clicking one window brings the main, cockpit and graph windows of this instance up together."""
-        for w in [self.root, *self.panels.values(), clicked]:  # the clicked one last, so it stays in front
-            if w.winfo_exists() and w.state() != "iconic":
-                w.lift()
+    # --- drawing ---
 
     def _arrow_hover(self, xy):
         self._main_hover = xy
-        draw(self.canvas, self._ticks(), self.th, xy, self._off)
+        draw(self.canvas, self._ticks(), self.th, xy, self._off, self._countdown())
         self.canvas.configure(cursor="hand2" if xy and self._legend_at(*xy) else "")
 
     def _legend_at(self, x, y):
@@ -575,7 +638,7 @@ class App:
                     return tag[7:]
 
     def _toggle_legend(self, x, y):
-        """Show or hide the arrows of the clicked legend entry (this window only, not stored)."""
+        """Show or hide the arrows of the clicked legend entry (this tab only, not stored)."""
         if kind := self._legend_at(x, y):
             self._off ^= {kind}
             self.redraw()  # cockpit and graph hide it too
@@ -584,145 +647,77 @@ class App:
     def _hover_at(self, x):
         self._hover = x
         if "graph" in self.panels:
-            draw_graph(self.panel_canvas["graph"], self._ticks(), self.th, x, self._off)
+            draw_graph(self.panel_canvas["graph"], self._ticks(), self.th, x, self._off, self._span())
 
-    def _apply_topmost(self):
-        """Keep cockpit and graph above the game (works with EVE in window or fixed window mode, not in fullscreen)."""
-        for name, key in (("cockpit", "always_on_top"), ("graph", "graph_on_top")):
-            if top := self.panels.get(name):
-                top.attributes("-topmost", self.cfg.getboolean("general", key))
-
-    def restart(self, char, mode=None):
-        """Reopen the window as a fresh program, e.g. after switching between client and server."""
-        self._restart(char, self._save_window(), mode or self.mode)  # same size and place
-        self.root.destroy()
-
-    def _close(self):
-        self._save_window()
-        self.root.destroy()
-
-    def _window_key(self, char):
-        # one entry per character, since several client instances run side by side
-        return "server" if self.mode == "server" else char or "client"
-
-    def _on_move(self, e):
-        """A window let go near another one docks to it (moves only, resizing never snaps)."""
-        top = e.widget
-        if top is not self.root and top not in self.panels.values():
-            return
-        if self._sizes.get(top) != (size := (e.width, e.height)):
-            self._sizes[top] = size
-            return
-        if job := self._snap_jobs.pop(top, None):
-            self.root.after_cancel(job)
-        self._snap_jobs[top] = self.root.after(250, lambda: self._snap(top))
-
-    def _snap(self, top):
-        self._snap_jobs.pop(top, None)
-        if not top.winfo_exists() or top.state() != "normal":
-            return
-        if (off := snap.offset(int(top.wm_frame(), 16))) is None:  # mouse still held: ask again shortly
-            self._snap_jobs[top] = self.root.after(150, lambda: self._snap(top))
-        elif off != (0, 0) and (m := re.search(r"\+(-?\d+)\+(-?\d+)$", top.geometry())):
-            top.geometry(f"+{int(m.group(1)) + off[0]}+{int(m.group(2)) + off[1]}")
-
-    def _track_place(self, event):
-        if event.widget is self.root and self.root.state() == "normal":
-            self._normal_geo = self.root.geometry()
-
-    def _save_window(self):
-        state = self.root.state()
-        normal = self.root.geometry() if state == "normal" else self._normal_geo or ""
-        geometry = f"zoomed {normal}".strip() if state == "zoomed" else normal
-        key = self._layout_key  # the character the windows belong to, also right after picking another one
+    def _span(self):
+        """Seconds the graph shows: the last few minutes, longer for replays; the fight itself is stored whole."""
+        live = self.replay is None
         try:
-            update_config(self.cfg_path, {"windows": {key: geometry, **{
-                f"{key}.{name}": self.panels[name].geometry() if name in self.panels
-                else f"off {self._panel_geo.get(name, '')}".strip() for name in PANELS}}})
-        except OSError:
-            pass  # a read-only folder must not keep the window from closing
-        return geometry
+            minutes = self.app.cfg.getint("general", "graph_live_minutes" if live else "graph_replay_minutes")
+        except ValueError:  # hand-edited garbage in config.ini
+            minutes = 5 if live else 10
+        return max(1, minutes) * 60
 
-    def _paste_code(self):
-        """Take the server's connection code "host:port/token" from the clipboard and reconnect with it."""
+    def _countdown(self):
+        """Seconds until the running fight ends for lack of events (the server's idle_end when connected); None in replays."""
+        if self.replay is not None or not self.live:
+            return None
+        last = next((t["t"] for t in reversed(self.live) if t["flows"]), self.live[0]["t"])
         try:
-            text = self.root.clipboard_get().strip()
-        except tk.TclError:
-            text = ""
-        m = re.fullmatch(r"(.+):(\d+)/(\S+)", text)
-        if not m or not 0 < int(m.group(2)) < 65536:
-            messagebox.showerror("Paste code", "The clipboard holds no connection code.\n"
-                                 "Copy it on the server (address:port/token) first.", parent=self.root)
-            return
-        host, port, token = m.groups()
-        update_config(self.cfg_path, {"client": {"host": host}, "general": {"port": port, "token": token}})
-        self.restart(self.char.get())
-
-    def _copy(self, text):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
-        self.status.set("connection code copied")
-
-    def call(self, fn, *args):
-        asyncio.run_coroutine_threadsafe(fn(*args), self.loop)
+            idle = int(self.live[-1].get("idle_end") or self.app.cfg.getint("general", "idle_end"))
+        except ValueError:
+            idle = IDLE_END
+        return max(0, idle - (self.live[-1]["t"] - last))
 
     def _ticks(self):
         return self.replay[:self.pos + 1] if self.replay is not None else self.live
 
     def redraw(self):
         ticks = self._ticks()
-        draw(self.canvas, ticks, self.th, self._main_hover, self._off)
+        if self.app.active is self:  # hidden tabs keep only their small windows up to date
+            draw(self.canvas, ticks, self.th, self._main_hover, self._off, self._countdown())
         for name, cv in self.panel_canvas.items():
             if name == "graph":
-                draw_graph(cv, ticks, self.th, self._hover, self._off)
+                draw_graph(cv, ticks, self.th, self._hover, self._off, self._span())
             else:
                 PANELS[name][3](cv, ticks, self.th, self._off)
 
-    def _drain(self):
-        """Handle what the network thread queued."""
-        try:
-            while True:
-                msg = self.q.get_nowait()
-                kind = msg.get("type")
-                if kind == "tick":
-                    self.live.append(msg)
-                elif kind == "reset":
-                    self.live = []
-                elif kind == "status":
-                    self.status.set(msg["text"])
-                elif kind == "warning":
-                    self.warning.set(msg["text"])
-                elif kind == "history":
-                    self._history(msg["sessions"], msg.get("secs", {}))
-                elif kind == "session":
-                    self._start_replay(msg["ticks"])
-                elif kind == "clients":
-                    names = [f"{', '.join(chars) or 'no character yet'} ({', '.join(filter(None, (addr, ver)))})"
-                             for addr, chars, ver in msg["list"]]
-                    self.clients.set(f"{len(names)} connected:   " + "   ·   ".join(names) if names
-                                     else "no client connected")
-                elif kind == "update":
-                    self._offer_update(msg)
-                elif kind == "updated":
-                    update_config(self.cfg_path, {"update": {"installed": msg["tag"]}})  # tells the other windows
-                    self.restart(self._char())
-                    return
-                if kind in ("tick", "reset") and self.replay is None:
-                    self.redraw()
-        except queue.Empty:
-            pass
-        self.root.after(100, self._drain)
+    def handle(self, msg):
+        """A message of this tab's backend."""
+        kind = msg.get("type")
+        if kind == "tick":
+            self.live.append(msg)
+        elif kind == "reset":
+            self.live = []
+        elif kind == "status":
+            self.status.set(msg["text"])
+        elif kind == "warning":
+            self.warning.set(msg["text"])
+        elif kind == "code":
+            self._set_code(msg["text"])
+        elif kind == "history":
+            self._history(msg["sessions"], msg.get("secs", {}))
+        elif kind == "session":
+            self._start_replay(msg["ticks"])
+        elif kind == "clients":
+            names = [f"{', '.join(chars) or 'no character yet'} ({', '.join(filter(None, (addr, ver)))})"
+                     for addr, chars, ver in msg["list"]]
+            self.clients.set(f"{len(names)} connected:   " + "   ·   ".join(names) if names
+                             else "no client connected")
+        if kind in ("tick", "reset") and self.replay is None:
+            self.redraw()
 
     def _set_char(self):
-        char = self.char.get()
-        if snap.char_open(char, int(self.root.wm_frame(), 16)):
-            # one instance per character: a second one would sit on the first one's places and overwrite them
+        app, char = self.app, self.char.get()
+        if char in {t.name() for t in app.tabs.values() if t is not self} | app.taken():
+            # one tab per character: a second one would sit on the first one's places and overwrite them
             self.char.set(self.backend.char or "")
-            self.status.set(f"{char} is already open in another window")
+            self.status.set(f"{char} is already open in another tab or window")
             return
-        self._save_window()  # keep the places of the character we leave
-        self.call(self.backend.set_char, self.char.get())
-        self._title()
+        app._save_window()  # keep the places of the character we leave
+        self.call(self.backend.set_char, char)
+        self.title()
+        app._title()
         self._restore_layout()
 
     def _toggle(self):
@@ -731,26 +726,25 @@ class App:
         self._conn_text()
 
     def _conn_text(self):
-        self.conn.configure(text=f"Connection: {'on' if self.enabled else 'off'}")
+        self.conn.configure(text=f"⇄ Connection: {'on' if self.enabled else 'off'}")
 
     # --- replays ---
 
     def _history(self, sessions, secs):
-        if (top := getattr(self, "_replays_top", None)) and top.winfo_exists():  # one replay list per window
+        th = self.th
+        if (top := self._replays_top) and top.winfo_exists():  # one replay list per tab
             for w in top.winfo_children():  # fill it again with the fresh list
                 w.destroy()
-            self._place_dialog(top)  # the main window may have moved since
+            self.app._place_dialog(top)  # the main window may have moved since
             top.deiconify()
             top.lift()
             top.focus_force()
         else:
-            top = self._replays_top = self._dialog("Replays")
+            top = self._replays_top = self.app._dialog(f"Replays – {self.name()}")
         if not sessions:
-            tk.Label(top, text="No fights stored yet.", bg=self.th["bg"], fg=self.th["fg"]).pack(
-                padx=20, pady=20)
+            tk.Label(top, text="No fights stored yet.", bg=th["bg"], fg=th["fg"]).pack(padx=20, pady=20)
             return
-        lb = tk.Listbox(top, width=34, height=15, bg=self.th["panel"], fg=self.th["fg"], relief="flat",
-                        font=(FONT, 10))
+        lb = tk.Listbox(top, width=34, height=15, bg=th["panel"], fg=th["fg"], relief="flat", font=(FONT, 10))
         lb.insert("end", *(f"{fight_label(n)}   {_mmss(secs[n]) if n in secs else ''}" for n in sessions))
         lb.pack(padx=10, pady=10)
 
@@ -759,7 +753,7 @@ class App:
                 self.call(self.backend.load, sessions[sel[0]])
                 top.destroy()
         lb.bind("<Double-1>", play)
-        self._button(top, "Play", play).pack(pady=(0, 10))
+        _button(top, "▶ Play", play, th).pack(pady=(0, 10))
 
     def _start_replay(self, ticks):
         if not ticks:
@@ -767,15 +761,16 @@ class App:
         self.replay, self.pos, self.playing = ticks, 0, True
         self.scale.configure(to=len(ticks) - 1)
         self.scale.set(0)
-        self.play_btn.configure(text="Stop")
+        self.play_btn.configure(text="⏸ Stop")
         self.replay_bar.pack(fill="x", after=self.bar)
+        self.app.select(self.tid)  # the replay plays in this tab
         self._schedule()
         self._seek(0)
 
     def _schedule(self):
         if self._timer:
-            self.root.after_cancel(self._timer)
-        self._timer = self.root.after(TICK * 1000, self._step)
+            self.app.root.after_cancel(self._timer)
+        self._timer = self.app.root.after(TICK * 1000, self._step)
 
     def _step(self):
         self._timer = None
@@ -798,15 +793,261 @@ class App:
         if not self.playing and self.pos >= len(self.replay) - 1:
             self.scale.set(0)  # Start at the end replays from the beginning
         self.playing = not self.playing
-        self.play_btn.configure(text="Stop" if self.playing else "Start")
+        self.play_btn.configure(text="⏸ Stop" if self.playing else "▶ Start")
 
     def _stop_replay(self):
         if self._timer:
-            self.root.after_cancel(self._timer)
+            self.app.root.after_cancel(self._timer)
             self._timer = None
         self.replay = None
         self.replay_bar.pack_forget()
         self.redraw()
+
+
+class App:
+    """The main window: one tab per character's client, plus the server tab if this instance runs it."""
+
+    def __init__(self, tabs, make, loop, q, cfg, cfg_path, restart=None, geometry=None):
+        self.make, self.loop, self.q = make, loop, q  # make(mode, char, out) builds a tab's backend
+        self._restart = restart
+        self.cfg, self.cfg_path = cfg, cfg_path
+        self.th = th = THEMES["client"]
+        self.tabs, self.active, self._next = {}, None, 0
+
+        root = self.root = tk.Tk()
+        root.minsize(900, 560)
+        root.geometry(MAIN_SIZE)
+        root.iconphoto(True, tk.PhotoImage(data=APP_ICON))  # True: cockpit, graph and dialogs get it too
+        self._normal_geo = None  # last place while neither maximized nor minimized
+        windows = _saved_windows(cfg_path)
+        if place := geometry or windows.get("main") or windows.get("server" if tabs[0][0] == "server" else
+                                                                    tabs[0][1] or "client"):
+            self._place(place)  # a restart passes the place it had; before tabs it was stored per character
+        root.bind("<Configure>", self._track_place, add="+")
+        self._sizes, self._snap_jobs = {}, {}
+        root.bind("<Configure>", self._on_move, add="+")
+        root.protocol("WM_DELETE_WINDOW", self._close)
+        # any widget getting focus (a click often focuses a child, not the window) raises the whole group
+        root.bind_all("<FocusIn>", self._on_focus, add="+")
+        root.configure(bg=th["bg"])
+        self.tabbar = tk.Frame(root, bg=th["panel"])
+        self.tabbar.pack(fill="x")
+        for mode, char in tabs:
+            self.add_tab(mode, char)
+        try:
+            self.select(list(self.tabs)[int(windows.get("tab", 0))])
+        except (ValueError, IndexError):
+            pass
+        root.after(100, self._drain)
+        if cfg.getboolean("update", "check"):
+            root.after(5000, self._check_online)  # after the first connection messages
+
+    # --- tabs ---
+
+    def add_tab(self, mode, char=None):
+        tid, self._next = self._next, self._next + 1
+        self.tabs[tid] = Tab(self, tid, mode, char)
+        self.select(tid)
+        self._title()
+
+    def select(self, tid):
+        tab = self.tabs[tid]
+        if self.active and self.active is not tab:
+            self.active.frame.pack_forget()
+        self.active = tab
+        tab.frame.pack(fill="both", expand=True)
+        self._tabbar()
+        tab.redraw()
+
+    def close_tab(self, tid):
+        if len(self.tabs) < 2:  # the window always keeps one tab
+            return
+        tab = self.tabs.pop(tid)
+        self._store(tab.windows())
+        tab.close()
+        if self.active is tab:
+            self.active = None
+            self.select(next(iter(self.tabs)))
+        self._title()
+        self._tabbar()
+
+    def taken(self):
+        """Tab names other running instances show."""
+        return snap.open_tabs(int(self.root.wm_frame(), 16))
+
+    def _new_client(self):
+        """A tab for the first character from the logs that no tab and no other window shows yet."""
+        taken = {t.name() for t in self.tabs.values()} | self.taken()
+        chars = logparse.characters(self.cfg["client"]["log_dir"])
+        self.add_tab("client", next((c for c in chars if c not in taken), None))
+
+    def _new_server(self):
+        if server := next((tid for tid, t in self.tabs.items() if t.mode == "server"), None):
+            self.select(server)
+        elif "Server" in self.taken():
+            messagebox.showinfo("Server", "Another eos-fight-mon window already runs the server.", parent=self.root)
+        else:
+            self.add_tab("server")
+
+    def _tabbar(self):
+        """One button per tab (the shown one filled), × closes it; adding tabs and the window-wide buttons right."""
+        for w in self.tabbar.winfo_children():
+            w.destroy()
+        th = self.th
+        for tid, tab in self.tabs.items():
+            on, tth = tab is self.active, tab.th
+            b = tk.Button(self.tabbar, text=tab.name(), command=lambda tid=tid: self.select(tid), relief="flat",
+                          bg=tth["accent"] if on else th["bg"], fg=th["bg"] if on else tth["accent"],
+                          activebackground=tth["accent"], activeforeground=th["bg"], padx=10,
+                          font=(FONT, 9, "bold"))
+            b.pack(side="left", padx=(6, 0), pady=4)
+            b.bind("<Button-2>", lambda e, tid=tid: self.close_tab(tid))  # middle click closes, as in browsers
+            if len(self.tabs) > 1:
+                tk.Button(self.tabbar, text="×", command=lambda tid=tid: self.close_tab(tid), relief="flat",
+                          bg=th["bg"], fg=th["dim"], activebackground=COLORS["dmg"], activeforeground=th["fg"],
+                          padx=4).pack(side="left", pady=4)
+        _button(self.tabbar, "+ Client", self._new_client, th).pack(side="left", padx=(12, 4))
+        if not any(t.mode == "server" for t in self.tabs.values()):
+            _button(self.tabbar, "+ Server", self._new_server, THEMES["server"]).pack(side="left", padx=4)
+        _button(self.tabbar, "⚙ Settings", self._settings, th).pack(side="right", padx=(4, 10), pady=4)
+        _button(self.tabbar, "⟲ Reset size", self._reset_size, th).pack(side="right", padx=4)
+
+    def _title(self):
+        self.root.title("eos-fight-mon – " + " · ".join(t.name() for t in self.tabs.values()))
+        if self.tabs:
+            self._tabbar()
+
+    def _panels(self):
+        return [top for tab in self.tabs.values() for top in tab.panels.values()]
+
+    # --- window places ---
+
+    def _place(self, geometry):
+        # "zoomed WxH+X+Y": the normal place picks the monitor the window maximizes on
+        if _valid_place(normal := geometry.removeprefix("zoomed").strip()):
+            self._normal_geo = normal
+            if self.root.state() == "zoomed":
+                self.root.state("normal")
+            self.root.geometry(normal)
+        if geometry.startswith("zoomed"):
+            self.root.state("zoomed")
+
+    def _reset_size(self):
+        """Back to the size the window had at the very first start; the place stays."""
+        self.root.state("normal")
+        self.root.geometry(MAIN_SIZE)
+
+    def _on_focus(self, e):
+        try:
+            top = e.widget.winfo_toplevel()
+        except (AttributeError, tk.TclError):  # e.g. a combobox popdown tkinter does not know
+            return
+        if top is self.root or top in self._panels():
+            self._raise_group(top)
+
+    def _raise_group(self, clicked):
+        """Clicking one window brings the main window and all cockpit and graph windows of this instance up."""
+        for w in [self.root, *self._panels(), clicked]:  # the clicked one last, so it stays in front
+            if w.winfo_exists() and w.state() != "iconic":
+                w.lift()
+
+    def _on_move(self, e):
+        """A window let go near another one docks to it (moves only, resizing never snaps)."""
+        top = e.widget
+        if top is not self.root and top not in self._panels():
+            return
+        if self._sizes.get(top) != (size := (e.width, e.height)):
+            self._sizes[top] = size
+            return
+        if job := self._snap_jobs.pop(top, None):
+            self.root.after_cancel(job)
+        self._snap_jobs[top] = self.root.after(250, lambda: self._snap(top))
+
+    def _snap(self, top):
+        self._snap_jobs.pop(top, None)
+        if not top.winfo_exists() or top.state() != "normal":
+            return
+        if (off := snap.offset(int(top.wm_frame(), 16))) is None:  # mouse still held: ask again shortly
+            self._snap_jobs[top] = self.root.after(150, lambda: self._snap(top))
+        elif off != (0, 0) and (m := re.search(r"\+(-?\d+)\+(-?\d+)$", top.geometry())):
+            top.geometry(f"+{int(m.group(1)) + off[0]}+{int(m.group(2)) + off[1]}")
+
+    def _track_place(self, event):
+        if event.widget is self.root and self.root.state() == "normal":
+            self._normal_geo = self.root.geometry()
+
+    def _store(self, windows):
+        try:
+            update_config(self.cfg_path, {"windows": windows})
+        except OSError:
+            pass  # a read-only folder must not keep the window from closing
+
+    def _save_window(self):
+        """Main window place, the small windows of every tab, and which tabs are open (reopened at the next start)."""
+        state = self.root.state()
+        normal = self.root.geometry() if state == "normal" else self._normal_geo or ""
+        geometry = f"zoomed {normal}".strip() if state == "zoomed" else normal
+        tabs = list(self.tabs.values())
+        names = [SERVER if t.mode == "server" else t._char() for t in tabs]
+        windows = {"main": geometry, "tabs": "|".join(filter(None, names)),
+                   "tab": str(tabs.index(self.active) if self.active in tabs else 0)}
+        for tab in tabs:
+            windows.update(tab.windows())
+        self._store(windows)
+        return geometry
+
+    def restart(self):
+        """Reopen the window as a fresh program with the same tabs, e.g. after changing the port."""
+        self._restart(self._save_window())  # same size and place
+        self.root.destroy()
+
+    def _close(self):
+        self._save_window()
+        self.root.destroy()
+
+    def _paste_code(self):
+        """Take the server's connection code "host:port/token" from the clipboard and reconnect with it."""
+        try:
+            text = self.root.clipboard_get().strip()
+        except tk.TclError:
+            text = ""
+        m = re.fullmatch(r"(.+):(\d+)/(\S+)", text)
+        if not m or not 0 < int(m.group(2)) < 65536:
+            messagebox.showerror("Paste code", "The clipboard holds no connection code.\n"
+                                 "Copy it on the server (address:port/token) first.", parent=self.root)
+            return
+        host, port, token = m.groups()
+        update_config(self.cfg_path, {"client": {"host": host}, "general": {"port": port, "token": token}})
+        self.restart()
+
+    def _status(self, text):
+        for tab in self.tabs.values():
+            tab.status.set(text)
+
+    def _drain(self):
+        """Handle what the network thread queued: (tab id, message), tab id None for the whole window."""
+        try:
+            while True:
+                tid, msg = self.q.get_nowait()
+                if tid is not None:
+                    if tab := self.tabs.get(tid):  # a closed tab's last messages are dropped
+                        tab.handle(msg)
+                    continue
+                kind = msg.get("type")
+                if kind == "status":
+                    self._status(msg["text"])
+                elif kind == "update":
+                    self._offer_update(msg)
+                elif kind == "updated":
+                    update_config(self.cfg_path, {"update": {"installed": msg["tag"]}})  # tells the other windows
+                    self.restart()
+                    return
+        except queue.Empty:
+            pass
+        self.root.after(100, self._drain)
+
+    def _put(self, msg):
+        self.q.put((None, msg))
 
     # --- update ---
 
@@ -818,7 +1059,7 @@ class App:
                 found = update.latest()
                 parts.append(f"{found[0]} available" if found else f"v{update.VERSION} is the newest")
                 if found and update.can_install():
-                    self.q.put({"type": "update", "tag": found[0], "assets": found[1], "manual": False})
+                    self._put({"type": "update", "tag": found[0], "assets": found[1], "manual": False})
             except (OSError, ValueError, KeyError):
                 pass  # GitHub or CCP unreachable: leave that part out
             try:
@@ -826,13 +1067,13 @@ class App:
             except (OSError, ValueError, KeyError):
                 pass
             if parts:
-                self.q.put({"type": "status", "text": "  ·  ".join(parts)})
+                self._put({"type": "status", "text": "  ·  ".join(parts)})
         threading.Thread(target=run, daemon=True).start()
 
     def _check_update(self, manual):
         """Ask GitHub in the background; the answer comes back through the queue."""
         if not update.can_install():
-            self.status.set("running from source: no self-update")
+            self._status("running from source: no self-update")
             return
 
         def run():
@@ -840,12 +1081,12 @@ class App:
                 found = update.latest()
             except (OSError, ValueError, KeyError) as e:
                 if manual:
-                    self.q.put({"type": "status", "text": f"update check failed: {e}"})
+                    self._put({"type": "status", "text": f"update check failed: {e}"})
                 return
             if found:
-                self.q.put({"type": "update", "tag": found[0], "assets": found[1], "manual": manual})
+                self._put({"type": "update", "tag": found[0], "assets": found[1], "manual": manual})
             elif manual:
-                self.q.put({"type": "status", "text": f"v{update.VERSION} is the newest version"})
+                self._put({"type": "status", "text": f"v{update.VERSION} is the newest version"})
         threading.Thread(target=run, daemon=True).start()
 
     def _offer_update(self, msg):
@@ -856,7 +1097,7 @@ class App:
         if state.get("installed") == tag:
             if messagebox.askyesno("Update", f"{tag} was installed by another eos-fight-mon window.\n\n"
                                    "Restart this window with it now?", parent=self.root):
-                self.restart(self._char())
+                self.restart()
             return
         if not msg["manual"] and state.get("skip") == tag:
             return
@@ -866,14 +1107,14 @@ class App:
                                    parent=self.root):
             update_config(self.cfg_path, {"update": {"skip": tag}})
             return
-        self.status.set(f"downloading {tag} …")
+        self._status(f"downloading {tag} …")
 
         def run():
             try:
                 update.install(msg["assets"])
-                self.q.put({"type": "updated", "tag": tag})
+                self._put({"type": "updated", "tag": tag})
             except (OSError, ValueError, KeyError) as e:
-                self.q.put({"type": "status", "text": f"update failed: {e}"})
+                self._put({"type": "status", "text": f"update failed: {e}"})
         threading.Thread(target=run, daemon=True).start()
 
     # --- settings ---
@@ -897,33 +1138,31 @@ class App:
             top.lift()
             top.focus_force()
             return
+        th = self.th
         top = self._settings_top = self._dialog("Settings")
-        fields = [("Mode", "general", "mode"), ("Server address or connection code", "client", "host"),
+        fields = [("Server address or connection code", "client", "host"),
                   ("Port", "general", "port"), ("Token", "general", "token"), ("Fight ends after idle seconds", "general", "idle_end"),
                   ("Cockpit always on top (over EVE in window mode)", "general", "always_on_top"),
                   ("Graph always on top (over EVE in window mode)", "general", "graph_on_top"),
+                  ("Graph shows the last minutes (live)", "general", "graph_live_minutes"),
+                  ("Graph shows the last minutes (replays)", "general", "graph_replay_minutes"),
                   ("Show friendly fire (when connected, the server's setting counts)", "general", "friendly_fire"),
                   ("Check for updates at start", "update", "check"),
                   ("Log folder", "client", "log_dir")]  # log folder last: the browse button sits in its row
         values = {}
         for row, (label, sec, key) in enumerate(fields):
-            tk.Label(top, text=label, bg=self.th["bg"], fg=self.th["fg"]).grid(row=row, column=0, sticky="w",
-                                                                              padx=10, pady=4)
-            # the mode belongs to this start, not to the shared config
-            var = values[(sec, key)] = tk.StringVar(value=self.mode if key == "mode" else self.cfg[sec][key])
-            if key == "mode":
-                ttk.Combobox(top, textvariable=var, values=["client", "server"], state="readonly", width=12).grid(
-                    row=row, column=1, sticky="w", padx=10)
-            elif key in ("always_on_top", "graph_on_top", "friendly_fire", "check"):
+            tk.Label(top, text=label, bg=th["bg"], fg=th["fg"]).grid(row=row, column=0, sticky="w", padx=10, pady=4)
+            var = values[(sec, key)] = tk.StringVar(value=self.cfg[sec][key])
+            if key in ("always_on_top", "graph_on_top", "friendly_fire", "check"):
                 var.set("yes" if self.cfg.getboolean(sec, key) else "no")
                 # native ttk box (white with a dark tick): tk.Checkbutton draws the tick in system colours
-                ttk.Style(top).configure("Dark.TCheckbutton", background=self.th["bg"])
+                ttk.Style(top).configure("Dark.TCheckbutton", background=th["bg"])
                 ttk.Checkbutton(top, variable=var, onvalue="yes", offvalue="no", style="Dark.TCheckbutton").grid(
                     row=row, column=1, sticky="w", padx=6)
             else:
                 tk.Entry(top, textvariable=var, width=50).grid(row=row, column=1, padx=10)
         log_dir = values[("client", "log_dir")]
-        self._button(top, "…", lambda: log_dir.set(filedialog.askdirectory(parent=top) or log_dir.get())).grid(
+        _button(top, "…", lambda: log_dir.set(filedialog.askdirectory(parent=top) or log_dir.get()), th).grid(
             row=len(fields) - 1, column=2, padx=(0, 10))
 
         def save():
@@ -939,25 +1178,28 @@ class App:
             if not idle.isdigit() or not 5 <= int(idle) <= 3600:
                 messagebox.showerror("Settings", "Idle seconds must be a number from 5 to 3600.", parent=top)
                 return
-            mode = values.pop(("general", "mode")).get()
+            for key in ("graph_live_minutes", "graph_replay_minutes"):
+                minutes = values[("general", key)].get().strip()
+                if not minutes.isdigit() or not 1 <= int(minutes) <= 600:
+                    messagebox.showerror("Settings", "Graph minutes must be a number from 1 to 600.", parent=top)
+                    return
             changed = {k for k, var in values.items() if self.cfg[k[0]][k[1]] != var.get().strip()}
             new = {}
             for sec, key in changed:
                 self.cfg[sec][key] = new.setdefault(sec, {})[key] = values[(sec, key)].get().strip()
             update_config(self.cfg_path, new)
             top.destroy()
-            self._apply_topmost()
-            # the rest is read live; a server keeps its running fight unless mode or port change
-            reload = {("general", "port")}
-            if self.mode == "client":
-                reload |= {("client", "host"), ("general", "token")}
-            if changed & reload or mode != self.mode:
-                self.restart(self.char.get() if self.mode == "client" else None, mode)
-            else:
-                self.status.set("settings saved")
-        self._button(top, "Check for updates", lambda: self._check_update(manual=True)).grid(
+            # the rest is read live; a server keeps its running fight unless the port changes
+            if changed & {("general", "port"), ("client", "host"), ("general", "token")}:
+                self.restart()
+                return
+            for tab in self.tabs.values():
+                tab.apply_topmost()
+                tab.redraw()
+            self._status("settings saved")
+        _button(top, "⟳ Check for updates", lambda: self._check_update(manual=True), th).grid(
             row=len(fields), column=0, sticky="w", padx=10, pady=10)
-        self._button(top, "Save", save).grid(row=len(fields), column=1, sticky="e", padx=10, pady=10)
+        _button(top, "✔ Save", save, th).grid(row=len(fields), column=1, sticky="e", padx=10, pady=10)
 
 
 def _mmss(secs):

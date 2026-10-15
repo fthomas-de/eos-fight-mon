@@ -2,17 +2,19 @@
 
 Live view of the current EVE Online fight. Clients read their gamelogs, the server merges all clients.
 
+- **Tabs**: one window holds a tab per character (*+ Client*) and, if this PC runs it, the server (*+ Server*). Each tab has its own fight view, replays, cockpit and graph window; × or a middle click closes a tab. The tabs open at the last close come back at the next start.
 - **Left**: the ships of all connected clients. **Right**: everyone else. Drone damage counts for the drone's owner; drones whose owner the log does not name are grouped on the right.
 - Arrows for damage, remote reps (shield/armor/hull/cap), neut/nos and scram/point/jam (dashed), as per-second rates over the last 10 s.
-- Cockpit: a small separate window with the fight clock and the team's incoming/outgoing sums, per second and for the whole fight. The *Cockpit* button opens and closes it; it stays when the main window is minimized and remembers its place per character, also while closed and when the character is picked after start.
-- Graph: a third small window with one chart per group (damage, reps, cap, neut/nos), the team's out (solid) and in (dashed) per second over the fight; move the mouse over it to read the values at that moment. The *Graph* button opens and closes it.
+- Cockpit: a small separate window with the fight clock and the team's incoming/outgoing sums, per second and for the whole fight. The *Cockpit* button opens and closes it; it stays when the main window is minimized and remembers its place per character, also while closed and when the character is picked after start. Every tab has its own cockpit.
+- Graph: a third small window with one chart per group (damage, reps, cap, neut/nos), the team's out (solid) and in (dashed) per second over the last 5 minutes (replays: 10 minutes, both adjustable in *Settings*; the fight is always stored whole); move the mouse over it to read the values and the log events of that moment. The *Graph* button opens and closes it.
+- While nobody acts, the main window shows *Fight ends in 0:42* in place of the enemies until the server ends the fight.
 - *Cockpit always on top* and *Graph always on top* in *Settings* keep those windows above the game. That works with EVE in window or fixed window mode, not in exclusive fullscreen.
 - Windows reopen on the monitor and at the place they were closed, also when closed maximized or minimized. *Reset size* (main window) and the small ⟲ in the cockpit and graph windows bring a window back to its original size.
 - Docking (Windows): a window let go within 15 px of another eos-fight-mon window (also of other characters) or a screen edge lines up with it.
 - The server window lists every connected client with the character it picked and its address (the headless server prints the list when it changes, and when a fight starts and ends).
 - Updates: on start the exe asks GitHub for a newer release and offers to install it. *Yes* downloads it, checks it against `SHA256SUMS.txt`, replaces the exe and restarts; *No* skips that version (*Settings › Check for updates* asks anyway). Other open windows then offer a restart only. Shortly after start the status line (headless: the log) says whether this is the newest version and whether the EVE static data the ship icons and drone names come from is still CCP's latest. Both can be turned off (`[update] check`).
 - Client and server tell each other their version: a client connected to a server of another version shows it as a warning, the server's client list names a client's version when it differs.
-- The server works in 2 s ticks and alone decides what a fight is: it starts with the first event and ends after 60 s without one (`idle_end`, adjustable in *Settings*) (or on *Reset* in the server window / `--reset` on the server machine; clients cannot reset). Clients fetch every stored fight of the last 7 days automatically; *Replays* (newest first) plays them with start/stop and a slider.
+- The server works in 2 s ticks and alone decides what a fight is: it starts with the first event and ends after 60 s without one (`idle_end`, adjustable in *Settings*; while nobody acts, the main window counts down to the end in place of the enemies) (or on *Reset* in the server window / `--reset` on the server machine; clients cannot reset). Clients fetch every stored fight of the last 7 days automatically; *Replays* (newest first) plays them with start/stop and a slider.
 - Without a server connection a client shows only its own ship on the left and its enemies on the right; ships that only rep it are hidden (their reps still count in the cockpit). Nothing is stored then.
 - Friendly fire (hostile effects between clients and ships that rep with them) is dropped unless *Show friendly fire* is on. With a server the server's setting counts for everyone.
 - Ship icons (32 px) for every ship type, packed into the exe.
@@ -120,12 +122,12 @@ Put `eos-fight-mon.exe` in a folder and double-click it. `config.ini` is created
 
 | Start | Use |
 |---|---|
-| `eos-fight-mon.exe` | client (a plain start is always a client; *Settings › Mode* switches this window to server): reads logs, sends them to the server, shows the merged fight |
-| `eos-fight-mon.exe --server` | server with window (e.g. on one player's Windows PC) |
+| `eos-fight-mon.exe` | the tabs open at the last close (first start: a client tab for the last active character). A client tab reads that character's logs, sends them to the server and shows the merged fight |
+| `eos-fight-mon.exe --server` | the same plus the server tab (e.g. on one player's Windows PC); *+ Server* in the window does the same |
 | `eos-fight-mon --headless` | server without window (e.g. Linux server) |
 | `eos-fight-mon --reset` | on the server machine: end the running fight (the headless server's reset button; only accepted from the same machine) |
 
-Every client instance belongs to exactly one character (dropdown top left, filled from the gamelogs of the last day). For several accounts start several instances, e.g. via shortcuts with `eos-fight-mon.exe --char "Name"`.
+Every client tab belongs to exactly one character (dropdown in the tab, filled from the gamelogs of the last day); one character is shown in one tab only, also across windows. For several accounts add a tab per character with *+ Client*. One window per `config.ini`: starting the exe again brings the running window to the front instead of opening a second one. A copy in another folder (own `config.ini`) runs on its own; there, `eos-fight-mon.exe --char "Name"` opens only that character's tab (tabs another window already shows are skipped).
 
 The *Connection* button turns the connection and its retry every 15 s on and off.
 
@@ -157,6 +159,9 @@ public_address =
 always_on_top = no
 # the same for the graph window
 graph_on_top = no
+# minutes the graph shows, live and in replays (1-600)
+graph_live_minutes = 5
+graph_replay_minutes = 10
 # show damage/ewar between our own ships; on a client it only counts without a server
 friendly_fire = no
 

@@ -65,13 +65,32 @@ if sys.platform == "win32":
     user32.FindWindowExW.restype = wintypes.HWND
     user32.FindWindowExW.argtypes = [wintypes.HWND, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR]
 
-    def title_taken(title, own):
-        """Is another Tk window (any instance, also minimized) titled exactly `title`? `own` is our frame handle."""
-        hwnd = None
-        while hwnd := user32.FindWindowExW(None, hwnd, "TkTopLevel", title):
-            if hwnd != own:
-                return True
-        return False
+    def _titles(own):
+        """Titles of the other instances' main windows, also minimized ones. `own` is our frame handle."""
+        found, hwnd, buf = [], None, ctypes.create_unicode_buffer(500)
+        while hwnd := user32.FindWindowExW(None, hwnd, "TkTopLevel", None):
+            user32.GetWindowTextW(hwnd, buf, 500)
+            if hwnd != own and buf.value.startswith(TITLES[0]):
+                found.append(buf.value)
+        return found
+
+    def focus(pid):
+        """Bring the main window of the process `pid` to the front, restored if minimized."""
+        found = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def visit(hwnd, _):
+            owner, title = wintypes.DWORD(), ctypes.create_unicode_buffer(500)
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            user32.GetWindowTextW(hwnd, title, 500)
+            if owner.value == pid and title.value.startswith(TITLES[0]):
+                found.append(hwnd)
+            return True
+        user32.EnumWindows(visit, 0)
+        for hwnd in found:
+            if user32.IsIconic(hwnd):
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(hwnd)
 
     def offset(frame):
         """dx, dy for the Tk window whose frame handle is `frame` (int(top.wm_frame(), 16)); None while still dragging."""
@@ -84,10 +103,19 @@ else:
     def offset(frame):
         return 0, 0  # the window manager does this on Linux
 
-    def title_taken(title, own):
-        return False  # no portable way to list other programs' windows
+    def _titles(own):
+        return []  # no portable way to list other programs' windows
+
+    def focus(pid):
+        pass  # the window manager decides
 
 
-def char_open(char, own=None):
-    """Does another instance already show this character? (matches App._title)"""
-    return title_taken(f"eos-fight-mon – Client – {char}", own)
+def tab_names(title):
+    """Tab names in a main window title (App._title); "Server" is the server. Also reads titles of
+    versions before tabs: "eos-fight-mon – Client – Name" and "eos-fight-mon – Server"."""
+    return set(title.removeprefix(TITLES[0]).removeprefix("Client – ").split(" · "))
+
+
+def open_tabs(own=None):
+    """Characters (and "Server") another running instance already shows."""
+    return set().union(*map(tab_names, _titles(own)))
