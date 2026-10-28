@@ -57,9 +57,9 @@ NOTIFY = "[ 2026.10.12 18:15:00 ] (notify) Ship stopping"
 class ParseTest(unittest.TestCase):
     def test_lines(self):
         cases = {
-            DMG_IN: Event("dmg", "Foe One", "Jackdaw", ME, None, 305, "Caldari Navy Nova Light Missile", ME),
-            DMG_OUT: Event("dmg", ME, None, "Foe Two", "Orthrus", 23, "Republic Fleet Warrior", ME),
-            DMG_NPC: Event("dmg", "Siphoning Guardian", None, ME, None, 16, None, ME),
+            DMG_IN: Event("dmg", "Foe One", "Jackdaw", ME, None, 305, "Caldari Navy Nova Light Missile", ME, "Hits"),
+            DMG_OUT: Event("dmg", ME, None, "Foe Two", "Orthrus", 23, "Republic Fleet Warrior", ME, "Penetrates"),
+            DMG_NPC: Event("dmg", "Siphoning Guardian", None, ME, None, 16, None, ME, "Smashes"),
             SHIELD_BY: Event("shield", "Friend One", "Gila", ME, None, 75, "Small Murky Compact Remote Shield Booster", ME),
             CAP_BY_OLD: Event("cap", "Friend One", "Gila", ME, None, 122,
                               "Corpum C-Type Medium Remote Capacitor Transmitter", ME),
@@ -76,6 +76,8 @@ class ParseTest(unittest.TestCase):
             JAM_DRONE: Event("jam", "Hornet EC-300", None, ME, None, 1, "Hornet EC-300", ME),
             MISS: None,
             NOTIFY: None,
+            "[ 2026.10.28 21:02:05 ] (notify) Your <b>Armor Command Burst II</b> has applied bonuses to <b>6</b> fleet "
+            "members.": Event("burst", ME, None, ME, None, 6, "Armor Command Burst II", ME),
         }
         for line, want in cases.items():
             self.assertEqual(parse(line, ME), want, line)

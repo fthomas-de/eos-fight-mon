@@ -6,11 +6,16 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-# kind: dmg | shield | armor | hull | cap | neut | nos | scram | point | jam
-Event = namedtuple("Event", "kind src src_ship dst dst_ship amount weapon logger")
-KINDS = {"dmg", "shield", "armor", "hull", "cap", "neut", "nos", "scram", "point", "jam"}
+# kind: dmg | shield | armor | hull | cap | neut | nos | scram | point | jam | burst
+# burst: the listener's command burst (weapon) reached amount fleet members; src = dst = listener
+# quality: how well a shot hit ("Wrecks", "Smashes", … in the client's language), None for everything else
+Event = namedtuple("Event", "kind src src_ship dst dst_ship amount weapon logger quality", defaults=(None,))
+KINDS = {"dmg", "shield", "armor", "hull", "cap", "neut", "nos", "scram", "point", "jam", "burst"}
 
 _LINE = re.compile(r"\[ [\d.: ]+ \] \(combat\) (.*)")
+# English only: no client in another language has logged a burst here yet
+_BURST = re.compile(r"\[ [\d.: ]+ \] \(notify\) Your <b>([^<]*Burst[^<]*)</b> has applied bonuses to <b>(\d+)</b> fleet "
+                    r"members\.")
 # Every client language writes the same markup, only the words differ. So a line is read by its structure:
 # the colour gives kind and direction, <b> holds amount and names, and non-English clients add the English
 # name of ships and modules as <localized hint="...">; the shown name after it ends with "*".
@@ -64,6 +69,8 @@ def _pieces(body):
 
 def parse(line, logger):
     """One gamelog line -> Event, or None for everything that is not a combat effect (misses included)."""
+    if b := _BURST.fullmatch(line):
+        return Event("burst", logger, None, logger, None, int(b[2]), b[1], logger)
     m = _LINE.fullmatch(line)
     if not m or not (c := _COLOR.match(m[1])):
         return None
@@ -85,7 +92,8 @@ def parse(line, logger):
     parts = rest.split(" - ")
     if color in _DMG:
         weapon = (hint[1] if hint else parts[1]) if len(parts) >= 3 else None
-        return _between("dmg", _DMG[color], other[0], amount, weapon, logger)
+        quality = re.sub("\x01.*?\x02", "", parts[-1]).strip() if len(parts) >= 2 else None
+        return _between("dmg", _DMG[color], other[0], amount, weapon, logger, quality or None)
     module = hint[1] if hint else parts[-1] if len(parts) >= 2 else None
     verb = " ".join(re.sub("\x01.*?\x02", "", p[0]) for p in pieces if not p[1])
     if color in _ENERGY:  # NPCs name themselves instead of the module
@@ -95,11 +103,11 @@ def parse(line, logger):
     return kind and _between(kind, bool(_RECEIVED.search(verb)), other[0], amount, module, logger)
 
 
-def _between(kind, incoming, other, amount, weapon, logger):
+def _between(kind, incoming, other, amount, weapon, logger, quality=None):
     name, ship = party(other, logger)
     if incoming:
-        return Event(kind, name, ship, logger, None, amount, weapon, logger)
-    return Event(kind, logger, None, name, ship, amount, weapon, logger)
+        return Event(kind, name, ship, logger, None, amount, weapon, logger, quality)
+    return Event(kind, logger, None, name, ship, amount, weapon, logger, quality)
 
 
 def _jam(bold, module, logger):

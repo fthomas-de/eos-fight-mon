@@ -58,7 +58,37 @@ class FightTest(unittest.TestCase):
         self.assertNotIn(["neut", "Turncoat", "A", 10], t["flows"])  # friendly fire
         self.assertEqual(t["hidden"], ["Mate", "Turncoat"])  # reps with us: friends
         f.end()
-        self.assertEqual(list(pathlib.Path(self.tmp.name).iterdir()), [])  # never stored
+        self.assertEqual(list(pathlib.Path(self.tmp.name).iterdir()), [])  # without history folder: not stored
+
+    def test_solo_fight_stored_under_its_character(self):
+        f = Fight(self.tmp.name, solo=True)
+        f.listeners = {"E 'o"}
+        f.add([ev("dmg", "Foe", "E 'o", 30, "E 'o")])
+        f.tick(100)
+        f.end()
+        [name] = list_history(self.tmp.name)
+        self.assertEqual(name, "19700101_000140.solo-E~20~~27~o.jsonl.gz")
+        self.assertEqual(history_secs(self.tmp.name, [name]), {name: 2})
+        self.assertEqual(load_history(self.tmp.name, name)[0]["hidden"], [])  # replays as it was seen
+
+    def test_bursts_start_a_fight(self):
+        self.f.add([ev("burst", "B", "B", 6, "B", "Armor Command Burst II")])
+        t = self.f.tick(0)
+        self.assertEqual((t["flows"], t["left"]), ([], ["B"]))  # links alone start a fight, without arrows
+        self.assertEqual(self.f.active_bursts(0), {"B": [["Armor Command Burst II", 6, 0]]})
+        self.f.add([ev("dmg", "Foe", "A", 50, "A"), ev("burst", "B", "B", 5, "B", "Information Command Burst II")])
+        t = self.f.tick(10)
+        self.assertEqual(t["bursts"], {"B": [["Armor Command Burst II", 6, 10], ["Information Command Burst II", 5, 0]]})
+        self.assertEqual(t["left"], ["A", "B"])  # the booster stands on the left without shooting
+        self.f.add([ev("burst", "B", "B", 4, "B", "Information Command Burst II")])
+        self.assertEqual(self.f.tick(125)["bursts"], {"B": [["Information Command Burst II", 4, 0]]})  # armor ran out
+        self.assertEqual(self.f.last_event, 125)  # links keep the fight running
+        self.f.end()
+        self.assertEqual(len(list_history(self.tmp.name)), 1)  # stored up to the last shot, the links' tail dropped
+        self.f.add([ev("burst", "B", "B", 6, "B", "Armor Command Burst II")])
+        self.f.tick(200)
+        self.f.end()
+        self.assertEqual(len(list_history(self.tmp.name)), 1)  # links alone are not stored
 
     def test_idle_end_and_history(self):
         self.assertIsNone(self.f.tick(0))  # no fight yet
@@ -82,8 +112,28 @@ class FightTest(unittest.TestCase):
         good = ["dmg", "A", None, "B", "Gila", 10, None, "A"]
         self.assertEqual(to_event(good), Event(*good))
         for bad in (["evil", *good[1:]], [*good[:5], -1, *good[6:]], [*good[:5], "10", *good[6:]],
-                    [*good[:1], "x" * 101, *good[2:]], good[:7], 5, None):
+                    [*good[:1], "x" * 101, *good[2:]], good[:7], [*good, 5], [*good, "x" * 101], 5, None):
             self.assertIsNone(to_event(bad), bad)
+        self.assertEqual(to_event([*good, "Wrecks"]).quality, "Wrecks")  # clients from v0.6.8 send hit quality
+
+    def test_single_events_kept_beside_the_sums(self):
+        self.f.add([Event("dmg", "Foe", "Orthrus", "A", None, 700, "Warrior", "A", "Wrecks"),
+                    Event("dmg", "Foe", "Orthrus", "A", None, 20, "Warrior", "A", "Grazes"),
+                    ev("scram", "Foe", "B", 1, "B"), ev("scram", "Foe", "B", 1, "B")])
+        t = self.f.tick(0)
+        self.assertEqual(sorted(t["flows"]), [["dmg", "Foe", "A", 720], ["scram", "Foe", "B", 1]])
+        self.assertEqual(t["events"], [["dmg", "Foe", "A", 700, "Warrior", "Wrecks"],
+                                       ["dmg", "Foe", "A", 20, "Warrior", "Grazes"],
+                                       ["scram", "Foe", "B", 1, None, None], ["scram", "Foe", "B", 1, None, None]])
+
+    def test_drones_named_in_single_events(self):
+        # A hits with Infiltrators, so a lone Infiltrator is probably A's; Hornets nobody of us flies stay unowned
+        self.f.add([ev("dmg", "A", "Foe", 50, "A", "Imperial Navy Infiltrator", dst_ship="Orthrus"),
+                    ev("point", "Foe", "Imperial Navy Infiltrator", 1, "B"), ev("dmg", "Hornet II", "B", 9, "B")])
+        t = self.f.tick(0)
+        self.assertIn(["point", "Foe", DRONES, 1], t["flows"])  # the main view still groups them
+        self.assertEqual([e[1:3] for e in t["events"][1:]], [["Foe", "Imperial Navy Infiltrator (drone, A?)"],
+                                                           ["Hornet II (drone)", "B"]])
 
 
 if __name__ == "__main__":

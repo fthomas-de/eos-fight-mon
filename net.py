@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from fight import (HISTORY_NAME, IDLE_END, TICK, Fight, history_secs, list_history, load_history, save_history,
                    to_event)
-from update import VERSION
+from update import VERSION, _key
 
 CLIENT_LIMIT = 64 * 2**20  # a whole fight comes in one line when replays sync
 SERVER_LIMIT = 2**20
@@ -119,6 +119,8 @@ class Server:
                 self._report_clients()
                 if tick := self.fight.tick(now):
                     self._broadcast({"type": "tick", **tick, "idle_end": idle_end(self.cfg)})  # clients show the end countdown
+                else:  # links outside a fight (older clients ignore the message)
+                    self._broadcast({"type": "bursts", "bursts": self.fight.active_bursts(now)})
                 if self.fight.ended(now, idle_end(self.cfg)):
                     await self.reset()
 
@@ -203,10 +205,12 @@ class Client:
     def __init__(self, cfg, watcher, out, char):
         self.cfg, self.watcher, self.out, self.char = cfg, watcher, out, char
         self.history_dir = cfg["general"]["history_dir"]  # replays synced from the server
-        self.fight = Fight(solo=True)  # live view while not connected; the server alone decides what a fight is
+        # live view while not connected, stored as "<start>.solo-<character>"; connected, the server decides
+        self.fight = Fight(self.history_dir, solo=True)
         self.enabled = cfg.getboolean("client", "auto_connect")
         self.writer = None
         self.mismatch = ""  # warning while connected to a server with another version
+        self.quality = False  # the server takes events with hit quality (from v0.6.8; older ones drop them)
         self.wake = asyncio.Event()
 
     async def run(self):
@@ -254,6 +258,7 @@ class Client:
                     text = "token rejected – check the connection code in the settings"
                     break
                 if kind == "version":
+                    self.quality = _key(str(msg["version"])) >= (0, 6, 8)
                     if msg["version"] != VERSION:
                         self.mismatch = f"server runs v{msg['version']}, this is v{VERSION}"
                 elif kind == "history":  # fetch the recent fights we do not have yet
@@ -274,6 +279,7 @@ class Client:
         finally:
             self.writer = None
             self.mismatch = ""
+            self.quality = False
             writer.close()
         self.out({"type": "reset"})
         self.out({"type": "status", "text": text})
@@ -286,7 +292,8 @@ class Client:
             events = await asyncio.to_thread(self.watcher.poll, self.cfg["client"]["log_dir"], char)
             self.out({"type": "warning", "text": _warning(char, self.watcher) or self.mismatch})
             if self.writer:
-                self.writer.write(_line({"type": "events", "listeners": [char] if char else [], "events": events}))
+                sent = events if self.quality else [e[:8] for e in events]  # without hit quality for older servers
+                self.writer.write(_line({"type": "events", "listeners": [char] if char else [], "events": sent}))
                 continue
             now = time.time()
             self.fight.listeners = {char}
@@ -294,6 +301,8 @@ class Client:
             self.fight.add(events)
             if tick := self.fight.tick(now):
                 self.out({"type": "tick", **tick, "idle_end": idle_end(self.cfg)})
+            else:
+                self.out({"type": "bursts", "bursts": self.fight.active_bursts(now)})
             if self.fight.ended(now, idle_end(self.cfg)):
                 self.fight.end()
                 self.out({"type": "reset"})
@@ -312,11 +321,19 @@ class Client:
         self.wake.set()
 
     async def stop(self):
-        """Its tab is closed: stop reading the logs and leave the server."""
+        """Its tab or window is closed: store a fight of its own, stop reading the logs and leave the server."""
         if task := getattr(self, "_pump_task", None):
             task.cancel()
         if self.writer:
             self.writer.close()
+        else:
+            self.fight.end()
+
+    async def reset(self):
+        """End the local fight now (clicking the countdown); while connected only the server may do that."""
+        if not self.writer:
+            self.fight.end()
+            self.out({"type": "reset"})
 
     async def set_char(self, char):
         self.char = char

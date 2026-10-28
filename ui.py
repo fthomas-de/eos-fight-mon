@@ -10,7 +10,7 @@ import re
 import sys
 import threading
 import tkinter as tk
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -19,7 +19,7 @@ import logparse
 import net
 import snap
 import update
-from fight import EWAR, IDLE_END, REPS, TICK, WINDOW
+from fight import BURST_SECS, DRONES, EWAR, IDLE_END, REPS, TICK, WINDOW, solo_char
 
 THEMES = {
     "client": {"bg": "#0e1621", "panel": "#172333", "fg": "#d8e4f0", "dim": "#71859a", "accent": "#3fa9f5"},
@@ -96,10 +96,22 @@ def _ewar(ticks, end=None):
             for k, s, d, _ in t["flows"] if k in EWAR and back < (JAM_TICKS if k == "jam" else WINDOW)}
 
 
-def draw(cv, ticks, th, hover=None, off=(), countdown=None):
+def _who(ticks, k, s, d):
+    """Names for an arrow's hover: "Drones (owner unknown)" becomes the drone types the single events of the last
+    ticks name (with the probable owner where the fight shows one)."""
+    if DRONES not in (s, d):
+        return s, d
+    side, other = (1, d) if s == DRONES else (2, s)  # where the drone stands in an event, and who is on the other end
+    names = ", ".join(sorted({e[side] for t in ticks[-max(WINDOW, JAM_TICKS):] for e in t.get("events", ())
+                              if e[0] == k and e[3 - side] == other and e[side] != other})) or DRONES
+    return (names, d) if side == 1 else (s, names)
+
+
+def draw(cv, ticks, th, hover=None, off=(), countdown=None, can_end=False):
     """Draw a fight up to its last tick: ships with per-second rates of the last 10 s; hover (x, y) shows the arrows there.
     off: legend entries whose arrows are hidden (clicking an entry toggles it).
-    countdown: seconds until the live fight ends; shown in place of the enemies while nobody acts."""
+    countdown: seconds until the live fight ends; shown in place of the enemies while nobody acts.
+    can_end: this window may end the fight (server, or a client without server): the countdown is clickable."""
     cv.delete("all")
     w, h = cv.winfo_width(), cv.winfo_height()
     if not ticks:
@@ -116,7 +128,8 @@ def draw(cv, ticks, th, hover=None, off=(), countdown=None):
             in_dmg[d] += r
         elif k in REPS:
             in_rep[d] += r
-    names = {n for _, s, d in [*rates, *ewar] for n in (s, d)} - set(last.get("hidden", ()))
+    bursts = last.get("bursts", {})  # a booster that only bursts still stands on the left
+    names = ({n for _, s, d in [*rates, *ewar] for n in (s, d)} | set(bursts)) - set(last.get("hidden", ()))
     left = sorted(n for n in names if n in left_names)
     right = sorted(names - set(left), key=lambda n: -(out_dmg[n] + in_dmg[n] + in_rep[n]))
 
@@ -127,11 +140,16 @@ def draw(cv, ticks, th, hover=None, off=(), countdown=None):
         right = right[:rows - 1] + [f"+{len(right) - rows + 1} more"]
     pos, tips = {}, {}
     if countdown is not None and not names:
-        x = w - 20 - BOX_W
-        cv.create_rectangle(x, top, x + BOX_W, top + 64, fill=th["panel"], outline=th["dim"])
-        cv.create_text(x + 10, top + 6, anchor="nw", text="No fight activity", fill=th["dim"], font=(FONT, 10))
+        x, tags = w - 20 - BOX_W, ("end",) if can_end else ()  # tag "end": a click ends the fight now
+        cv.create_rectangle(x, top, x + BOX_W, top + (80 if can_end else 64), fill=th["panel"], tags=tags,
+                            outline=th["accent"] if can_end else th["dim"])
+        cv.create_text(x + 10, top + 6, anchor="nw", text="No fight activity", fill=th["dim"], font=(FONT, 10),
+                       tags=tags)
         cv.create_text(x + 10, top + 26, anchor="nw", text=f"Fight ends in {_mmss(countdown)}", fill=th["accent"],
-                       font=(FONT, 16, "bold"))
+                       font=(FONT, 16, "bold"), tags=tags)
+        if can_end:
+            cv.create_text(x + 10, top + 58, anchor="nw", text="click to end it now", fill=th["dim"],
+                           font=(FONT, 9), tags=tags)
     for col, column in enumerate((left[:rows], right)):
         x = 20 if col == 0 else w - 20 - BOX_W
         for i, n in enumerate(column):
@@ -140,10 +158,10 @@ def draw(cv, ticks, th, hover=None, off=(), countdown=None):
 
     for (k, s, d), r in rates.items():
         if LEGEND_OF[k] not in off and (item := _arrow(cv, pos, k, s, d, 1 + min(6, math.log10(1 + r)))):
-            tips[item] = f"{NAMES[k]}  {s} → {d}  {fmt(r)}/s"
+            tips[item] = "{}  {} → {}  {}/s".format(NAMES[k], *_who(ticks, k, s, d), fmt(r))
     for k, s, d in ewar:
         if LEGEND_OF[k] not in off and (item := _arrow(cv, pos, k, s, d, 2, dash=(4, 3))):
-            tips[item] = f"{NAMES[k]}  {s} → {d}"
+            tips[item] = "{}  {} → {}".format(NAMES[k], *_who(ticks, k, s, d))
     for n, (_, _, col, x, y) in pos.items():
         cv.create_rectangle(x, y, x + BOX_W, y + row - 6, fill=th["panel"],
                             outline=th["accent"] if col == 0 else th["dim"])
@@ -151,7 +169,12 @@ def draw(cv, ticks, th, hover=None, off=(), countdown=None):
         if icon := ship_icon(ships.get(n, n)):  # NPCs and bare ship names are their own type
             cv.create_image(x + 3, y + (row - 6) / 2, anchor="w", image=icon)
             tx += 34
-        cv.create_text(tx, y + 3, anchor="nw", text=n, fill=th["fg"], font=(FONT, 10, "bold"))
+        name = cv.create_text(tx, y + 3, anchor="nw", text=n, fill=th["fg"], font=(FONT, 10, "bold"))
+        if n in bursts:  # "Armor 6  Info 5": running command bursts and the fleet members each reached
+            text = cv.create_text(x + BOX_W - 6, y + 4, anchor="ne", fill=th["accent"], font=(FONT, 8), text="  ".join(
+                f"{m.split()[0].replace('Information', 'Info')} {k}" for m, k, *_ in bursts[n]))
+            if cv.bbox(text)[0] < cv.bbox(name)[2] + 8:  # a long name: "A6 I5"
+                cv.itemconfigure(text, text=" ".join(f"{m[0]}{k}" for m, k, *_ in bursts[n]))
         info = f"{ships.get(n, '')}   out {fmt(out_dmg[n])}  in {fmt(in_dmg[n])}  rep {fmt(in_rep[n])}"
         cv.create_text(tx, y + 19, anchor="nw", text=info, fill=th["dim"], font=(FONT, 9))
 
@@ -265,7 +288,8 @@ def draw_graph(cv, ticks, th, hover=None, off=(), span=None):
     if len(data) < 2:
         cv.create_text(w / 2, h / 2, text="Waiting for a fight …", fill=th["dim"], font=(FONT, 11))
         return
-    pad_l, pad_r, top, bottom = 50, 12, 20, 18
+    links = any(t.get("bursts") for t in ticks[first:])
+    pad_l, pad_r, top, bottom = 50, 12, 30 if links else 20, 18  # links: room for their bars
     rows = [r for r in [*GROUPS, *EWAR_ROWS] if LEGEND_OF[r[1]] not in off]  # as hidden in the main window
     if not rows:
         cv.create_text(w / 2, h / 2, text="All hidden in the main window", fill=th["dim"], font=(FONT, 11))
@@ -276,7 +300,10 @@ def draw_graph(cv, ticks, th, hover=None, off=(), span=None):
     cv.create_line(pad_l, 10, pad_l + 22, 10, fill=th["fg"], width=2)
     cv.create_text(pad_l + 28, 10, anchor="w", text="out", fill=th["dim"], font=(FONT, 8))
     cv.create_line(pad_l + 60, 10, pad_l + 82, 10, fill=th["fg"], width=2, dash=(4, 3))
-    cv.create_text(pad_l + 88, 10, anchor="w", text="in   (per second, last 10 s)", fill=th["dim"], font=(FONT, 8))
+    legend = cv.create_text(pad_l + 88, 10, anchor="w", text="in   (per second, last 10 s)", fill=th["dim"],
+                            font=(FONT, 8))
+    if links:
+        _links_info(cv, ticks[first + (n - 1 if hover is None else i)], th, w - 30, legend)  # left of the ⟲ button
     for g, (label, color_kind, _) in enumerate(rows):
         y0 = top + g * ph
         base, height = y0 + ph - 4, ph - 20
@@ -307,17 +334,69 @@ def draw_graph(cv, ticks, th, hover=None, off=(), span=None):
         _events_box(cv, tick, th, x, top, h - bottom, w, off, tick["t"] - t0)
 
 
-def _events_box(cv, tick, th, x, top, bottom, w, off, secs):
-    """The log events of one tick beside the hover line, by kind as in the legend, biggest first."""
+LINKS = (("Information", "Info"), ("Armor", "Armor"), ("Shield", "Shield"), ("Skirmish", "Skirmish"))
+
+
+def _links_info(cv, tick, th, right, legend):
+    """"Links  Info 6  Armor 5  Shield –  Skirmish 6": fleet members each link type reaches in this tick
+    (the most of all boosters), under each a bar of the bonus time left (the freshest burst of that type);
+    when it does not fit, the legend loses its note, then the links shorten ("In6 Ar5 Sh– Sk6")."""
+    reached, left = {}, defaultdict(float)
+    for mods in tick.get("bursts", {}).values():
+        for m, k, *age in mods:  # ticks of older test builds hold no age: no bar
+            kind = m.split()[0]
+            reached[kind] = max(reached.get(kind, 0), k)
+            if age:
+                left[kind] = max(left[kind], 1 - age[0] / BURST_SECS)
+    for step in range(3):  # full; full with the legend shortened; short
+        if step == 1:
+            cv.itemconfigure(legend, text="in")
+        cv.delete("links")
+        x = right
+        for kind, short in reversed(LINKS):
+            on = kind in reached
+            item = cv.create_text(x, 10, anchor="e", fill=th["accent"] if on else th["dim"], font=(FONT, 8),
+                                  tags="links", text=f"{short[:2]}{reached[kind] if on else '–'}" if step == 2
+                                  else f"{short} {reached[kind] if on else '–'}")
+            x1, _, x2, _ = cv.bbox(item)
+            if on:
+                cv.create_rectangle(x1, 18, x2, 21, fill=th["panel"], outline="", tags="links")
+                cv.create_rectangle(x1, 18, x1 + (x2 - x1) * left[kind], 21, fill=th["accent"], outline="",
+                                    tags="links")
+            x = x1 - (5 if step == 2 else 10)
+        if step < 2:
+            x = cv.bbox(cv.create_text(x, 10, anchor="e", text="Links", fill=th["dim"], font=(FONT, 8),
+                                       tags="links"))[0]
+        if x >= cv.bbox(legend)[2] + 10:
+            break
+
+
+def _event_lines(tick, off):
+    """One tick's log events, by kind as in the legend, biggest first: each hit with amount and hit quality,
+    equal ones counted ("2× Scram …"). Ticks from before v0.6.8 hold only the sum per pair."""
     order = [k for _, entry in LEGEND for k in NAMES if LEGEND_OF[k] == entry]
-    flows = sorted((f for f in tick["flows"] if LEGEND_OF[f[0]] not in off), key=lambda f: (order.index(f[0]), -f[3]))
-    lines = [f"{NAMES[k]}  {s} → {d}" + ("" if k in EWAR else f"  {fmt(a)}") for k, s, d, a in flows] or ["no events"]
-    room = max(1, int((bottom - top - 24) // 13))
-    if len(lines) > room:
-        lines = lines[:room - 1] + [f"+{len(lines) - room + 1} more"]
-    text = cv.create_text(x + 10, top + 6, anchor="nw", fill=th["fg"], font=(FONT, 8),
-                          text=f"Log events {_mmss(secs)} – {_mmss(secs + TICK)}\n" + "\n".join(lines))
-    x1, y1, x2, y2 = cv.bbox(text)
+    single = tick.get("events") or [[*f, None, None] for f in tick["flows"]]
+    counts = Counter(tuple(e) for e in single if LEGEND_OF[e[0]] not in off)
+    lines = []
+    for (k, s, d, a, weapon, quality), n in sorted(counts.items(), key=lambda c: (order.index(c[0][0]), -c[0][3])):
+        what = " ".join(filter(None, (NAMES[k], None if k in EWAR else fmt(a), quality)))
+        lines.append(f"{f'{n}× ' if n > 1 else ''}{what}  {s} → {d}" + (f"  · {weapon}" if weapon else ""))
+    return lines or ["no events"]
+
+
+def _events_box(cv, tick, th, x, top, bottom, w, off, secs):
+    """The log events of one tick beside the hover line; long lines wrap, what does not fit is counted."""
+    lines, head = _event_lines(tick, off), f"Log events {_mmss(secs)} – {_mmss(secs + TICK)}"
+    shown = len(lines)
+    while True:
+        rest = [f"+{len(lines) - shown} more"] if shown < len(lines) else []
+        text = cv.create_text(x + 10, top + 6, anchor="nw", fill=th["fg"], font=(FONT, 8), width=w - 30,
+                              text="\n".join([head, *lines[:shown], *rest]))
+        x1, y1, x2, y2 = cv.bbox(text)
+        if y2 <= bottom or shown == 0:
+            break
+        cv.delete(text)
+        shown -= 1
     if x2 > w - 6:  # no room right of the line: put the box on its left, but never past the left edge
         cv.move(text, max(6 - x1, x - 10 - x2), 0)
         x1, y1, x2, y2 = cv.bbox(text)
@@ -326,9 +405,9 @@ def _events_box(cv, tick, th, x, top, bottom, w, off, secs):
 
 MAIN_SIZE = "1150x720"
 ICONS = {"cockpit": "⏱", "graph": "∿"}  # on the Cockpit/Graph buttons (Segoe UI Symbol; Tk falls back to it)
-PANELS = {  # small extra windows: title, default size, min size, painter
-    "cockpit": ("Cockpit", "340x144", (280, 140), draw_cockpit),
-    "graph": ("Graph", "460x460", (320, 310), draw_graph),
+PANELS = {  # small extra windows: title, default size, min (width, height, height per shown row), painter
+    "cockpit": ("Cockpit", "340x144", (280, 40, 20), draw_cockpit),
+    "graph": ("Graph", "460x460", (320, 40, 45), draw_graph),
 }
 
 
@@ -374,9 +453,11 @@ def _valid_place(geometry):
 
 
 def fight_label(name):
-    """'20261013_191334.jsonl.gz' (UTC) -> '2026-10-13  21:13:34' (local time)."""
+    """'20261013_191334.jsonl.gz' (UTC) -> '2026-10-13  21:13:34' (local time); a fight without server gets
+    'solo <character>'."""
     start = datetime.strptime(name[:15], "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
-    return start.astimezone().strftime("%Y-%m-%d  %H:%M:%S")
+    solo = re.search(r"\.solo-(.+?)\.jsonl", name)
+    return start.astimezone().strftime("%Y-%m-%d  %H:%M:%S") + (f"   solo {solo_char(solo[1])}" if solo else "")
 
 
 SERVER = ":server"  # the server tab in [windows] tabs; a colon is never part of a character name
@@ -428,6 +509,7 @@ class Tab:
         self.th = th = THEMES[mode]
         cfg = app.cfg
         self.live = []  # ticks of the running fight
+        self.bursts = {}  # links running while no fight is
         self.replay, self.pos, self.playing, self._timer = None, 0, False, None
         self.panels, self.panel_canvas, self._panel_geo, self._hover = {}, {}, {}, None
         self._main_hover, self._replays_top = None, None
@@ -498,7 +580,7 @@ class Tab:
         self.canvas.bind("<Configure>", lambda e: self.redraw())
         self.canvas.bind("<Motion>", lambda e: self._arrow_hover((e.x, e.y)))
         self.canvas.bind("<Leave>", lambda e: self._arrow_hover(None))
-        self.canvas.bind("<Button-1>", lambda e: self._toggle_legend(e.x, e.y))
+        self.canvas.bind("<Button-1>", lambda e: self._click(e.x, e.y))
         self._restore_layout(first=True)
 
     def name(self):
@@ -549,6 +631,10 @@ class Tab:
         A closed cockpit or graph is stored as "off WxH+X+Y" and reopens at that place."""
         windows = _saved_windows(self.app.cfg_path)
         key = self._layout_key = self._window_key()
+        # legend entries this character had hidden: before the windows open, they set the graph's min size
+        self._off = set(windows.get(f"{key}.hidden", "").split(",")) & {kind for _, kind in LEGEND}
+        for name in self.panels:
+            self._minsize(name)
         for name in PANELS:
             entry = windows.get(f"{key}.{name}")
             if entry is None:  # character never saved: both open at start, else leave them as they are
@@ -574,8 +660,9 @@ class Tab:
     def windows(self):
         """config [windows] entries of the small windows, under the character they belong to."""
         key = self._layout_key  # also right after picking another character
-        return {f"{key}.{name}": self.panels[name].geometry() if name in self.panels
-                else f"off {self._panel_geo.get(name, '')}".strip() for name in PANELS}
+        return {f"{key}.hidden": ",".join(sorted(self._off)), **{
+            f"{key}.{name}": self.panels[name].geometry() if name in self.panels
+            else f"off {self._panel_geo.get(name, '')}".strip() for name in PANELS}}
 
     def _mark_panels(self):
         """Cockpit/Graph button filled with the accent colour while its window is open."""
@@ -585,10 +672,9 @@ class Tab:
             btn.configure(bg=th["accent"] if on else th["bg"], fg=th["bg"] if on else th["fg"])
 
     def _open_panel(self, name):
-        _, size, minsize, _ = PANELS[name]
-        th = self.th
+        size, th = PANELS[name][1], self.th
         top = self.panels[name] = tk.Toplevel(self.app.root, bg=th["bg"])  # not transient: stays when the main one is minimized
-        top.minsize(*minsize)
+        self._minsize(name)
         top.geometry(size)
         if _valid_place(geometry := self._panel_geo.get(name, "")):
             top.geometry(geometry)
@@ -607,6 +693,12 @@ class Tab:
             cv.bind("<Leave>", lambda e: self._hover_at(None))
         self.title()
         self.apply_topmost()
+
+    def _minsize(self, name):
+        """The small windows may shrink to the rows the legend still shows (e.g. the graph with only Jam)."""
+        width, height, per_row = PANELS[name][2]
+        rows = [*GROUPS, *EWAR_ROWS] if name == "graph" else [*GROUPS, JAM_ROW]
+        self.panels[name].minsize(width, height + per_row * max(1, sum(LEGEND_OF[r[1]] not in self._off for r in rows)))
 
     def _toggle_panel(self, name):
         if top := self.panels.pop(name, None):
@@ -627,8 +719,8 @@ class Tab:
 
     def _arrow_hover(self, xy):
         self._main_hover = xy
-        draw(self.canvas, self._ticks(), self.th, xy, self._off, self._countdown())
-        self.canvas.configure(cursor="hand2" if xy and self._legend_at(*xy) else "")
+        draw(self.canvas, self._main_ticks(), self.th, xy, self._off, self._countdown(), self._can_end())
+        self.canvas.configure(cursor="hand2" if xy and (self._legend_at(*xy) or self._end_at(*xy)) else "")
 
     def _legend_at(self, x, y):
         """Legend entry under (x, y) or None. By position, not "current": every hover redraw replaces the items."""
@@ -637,10 +729,25 @@ class Tab:
                 if tag.startswith("legend:"):
                     return tag[7:]
 
+    def _end_at(self, x, y):
+        return any("end" in self.canvas.gettags(i) for i in self.canvas.find_overlapping(x, y, x, y))
+
+    def _can_end(self):
+        """Only the server, or a client without server, decides when a fight ends."""
+        return self.mode == "server" or self.backend.writer is None
+
+    def _click(self, x, y):
+        if self._end_at(x, y) and self._can_end():
+            self.call(self.backend.reset)  # the server stores the fight, as with its Reset button
+        else:
+            self._toggle_legend(x, y)
+
     def _toggle_legend(self, x, y):
-        """Show or hide the arrows of the clicked legend entry (this tab only, not stored)."""
+        """Show or hide the arrows of the clicked legend entry (this tab only, stored per character)."""
         if kind := self._legend_at(x, y):
             self._off ^= {kind}
+            for name in self.panels:
+                self._minsize(name)
             self.redraw()  # cockpit and graph hide it too
             self._arrow_hover(self._main_hover)
 
@@ -672,10 +779,17 @@ class Tab:
     def _ticks(self):
         return self.replay[:self.pos + 1] if self.replay is not None else self.live
 
+    def _main_ticks(self):
+        """The main window outside a fight still shows the pilots whose links run."""
+        if self._ticks() or not self.bursts or self.replay is not None:
+            return self._ticks()
+        return [{"t": 0, "flows": [], "ships": {}, "left": sorted(self.bursts), "bursts": self.bursts}]
+
     def redraw(self):
         ticks = self._ticks()
         if self.app.active is self:  # hidden tabs keep only their small windows up to date
-            draw(self.canvas, ticks, self.th, self._main_hover, self._off, self._countdown())
+            draw(self.canvas, self._main_ticks(), self.th, self._main_hover, self._off, self._countdown(),
+                 self._can_end())
         for name, cv in self.panel_canvas.items():
             if name == "graph":
                 draw_graph(cv, ticks, self.th, self._hover, self._off, self._span())
@@ -689,6 +803,10 @@ class Tab:
             self.live.append(msg)
         elif kind == "reset":
             self.live = []
+        elif kind == "bursts":
+            if msg["bursts"] == self.bursts:
+                return  # nothing changed: no redraw every 2 s
+            self.bursts = msg["bursts"]
         elif kind == "status":
             self.status.set(msg["text"])
         elif kind == "warning":
@@ -704,7 +822,7 @@ class Tab:
                      for addr, chars, ver in msg["list"]]
             self.clients.set(f"{len(names)} connected:   " + "   ·   ".join(names) if names
                              else "no client connected")
-        if kind in ("tick", "reset") and self.replay is None:
+        if kind in ("tick", "reset", "bursts") and self.replay is None:
             self.redraw()
 
     def _set_char(self):
@@ -719,6 +837,7 @@ class Tab:
         self.title()
         app._title()
         self._restore_layout()
+        self.redraw()  # with the legend entries the new character had hidden
 
     def _toggle(self):
         self.enabled = not self.enabled
@@ -744,7 +863,7 @@ class Tab:
         if not sessions:
             tk.Label(top, text="No fights stored yet.", bg=th["bg"], fg=th["fg"]).pack(padx=20, pady=20)
             return
-        lb = tk.Listbox(top, width=34, height=15, bg=th["panel"], fg=th["fg"], relief="flat", font=(FONT, 10))
+        lb = tk.Listbox(top, width=56, height=15, bg=th["panel"], fg=th["fg"], relief="flat", font=(FONT, 10))
         lb.insert("end", *(f"{fight_label(n)}   {_mmss(secs[n]) if n in secs else ''}" for n in sessions))
         lb.pack(padx=10, pady=10)
 
@@ -998,12 +1117,24 @@ class App:
 
     def restart(self):
         """Reopen the window as a fresh program with the same tabs, e.g. after changing the port."""
-        self._restart(self._save_window())  # same size and place
+        geometry = self._save_window()  # same size and place
+        self._stop_all()  # frees the server port before the new copy wants it
+        self._restart(geometry)
         self.root.destroy()
 
     def _close(self):
         self._save_window()
+        self._stop_all()
         self.root.destroy()
+
+    def _stop_all(self):
+        """Store the running fights (the server's, and the own fight of a client without server) before leaving."""
+        for tab in self.tabs.values():
+            try:
+                asyncio.run_coroutine_threadsafe(tab.backend.stop(), self.loop).result(3)
+            except Exception:  # a stuck backend must not keep the window open
+                pass
+            tab.future.cancel()
 
     def _paste_code(self):
         """Take the server's connection code "host:port/token" from the clipboard and reconnect with it."""
